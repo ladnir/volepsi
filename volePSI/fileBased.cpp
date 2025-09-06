@@ -304,7 +304,7 @@ namespace volePSI
                 auto privateKey = cmd.get<std::string>("sk");
                 auto publicKey = cmd.get<std::string>("pk");
 
-                if (!exist(CACert) || !exist(privateKey) || !exist(privateKey))
+                if (!exist(CACert) || !exist(privateKey) || !exist(publicKey))
                 {
                     std::cout << "\n";
                     if (!exist(CACert))
