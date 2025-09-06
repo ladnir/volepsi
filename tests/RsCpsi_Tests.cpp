@@ -30,8 +30,8 @@ namespace
         oc::Matrix<u8> senderValues(sendSet.size(), sizeof(block));
         std::memcpy(senderValues.data(), sendSet.data(), sendSet.size() * sizeof(block));
 
-        recver.init(sendSet.size(), recvSet.size(), byteLength, 40, prng.get(), nt);
-        sender.init(sendSet.size(), recvSet.size(), byteLength, 40, prng.get(), nt);
+        recver.init(sendSet.size(), recvSet.size(), byteLength, 40, prng.get(), nt, type);
+        sender.init(sendSet.size(), recvSet.size(), byteLength, 40, prng.get(), nt, type);
 
         RsCpsiReceiver::Sharing rShare;
         RsCpsiSender::Sharing sShare;
@@ -66,12 +66,11 @@ namespace
                 }
                 else
                 {
-
+                    auto rv = (u32*)&rShare.mValues(k, 0);
+                    auto sv = (u32*)&sShare.mValues(k, 0);
+                    
                     for (u64 j = 0; j < 4; ++j)
                     {
-                        auto rv = (u32*)&rShare.mValues(i, 0);
-                        auto sv = (u32*)&sShare.mValues(i, 0);
-
                         if (recvSet[i].get<u32>(j) != (sv[j] + rv[j]))
                         {
                             throw RTE_LOC;
@@ -183,18 +182,18 @@ void Cpsi_Rs_full_asym_test(const CLP& cmd)
 
 void Cpsi_Rs_full_add32_test(const CLP& cmd)
 {
-    //u64 n = cmd.getOr("n", 13243);
-    //std::vector<block> recvSet(n), sendSet(n);
-    //PRNG prng(ZeroBlock);
-    //prng.get(recvSet.data(), recvSet.size());
-    //sendSet = recvSet;
+    u64 n = cmd.getOr("n", 13243);
+    std::vector<block> recvSet(n), sendSet(n);
+    PRNG prng(ZeroBlock);
+    prng.get(recvSet.data(), recvSet.size());
+    sendSet = recvSet;
 
-    //std::set<u64> exp;
-    //for (u64 i = 0; i < n; ++i)
-    //    exp.insert(i);
+    std::set<u64> exp;
+    for (u64 i = 0; i < n; ++i)
+        exp.insert(i);
 
-    //auto inter = runCpsi(prng, recvSet, sendSet, 1, ValueShareType::add32);
-    //std::set<u64> act(inter.begin(), inter.end());
-    //if (act != exp)
-    //    throw RTE_LOC;
+    auto inter = runCpsi(prng, recvSet, sendSet, 1, ValueShareType::add32);
+    std::set<u64> act(inter.begin(), inter.end());
+    if (act != exp)
+        throw RTE_LOC;
 }
