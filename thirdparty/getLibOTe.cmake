@@ -77,6 +77,21 @@ if(NOT ${DEP_NAME}_FOUND OR LIBOTE_DEV)
         configure_file("${LIBDIVIDE_HEADER}" "${VOLEPSI_THIRDPARTY_DIR}/include/libdivide.h" COPYONLY)
     endif()
 
+    # Match AES::ecbEncBlocks: ARM's penultimate round omits MixColumns.
+    # AES-NI and portable AES use the same operation for roundFn and penultimateFn.
+    set(MULTIKEY_AES_HEADER "${CLONE_DIR}/cryptoTools/cryptoTools/Crypto/MultiKeyAES.h")
+    if(EXISTS "${MULTIKEY_AES_HEADER}")
+        file(READ "${MULTIKEY_AES_HEADER}" MULTIKEY_AES_SOURCE)
+        string(REPLACE
+            "AES::roundFn(ciphertext[i], mAESs[i].mRoundKey[9])"
+            "AES::penultimateFn(ciphertext[i], mAESs[i].mRoundKey[9])"
+            MULTIKEY_AES_FIXED "${MULTIKEY_AES_SOURCE}")
+        if(NOT MULTIKEY_AES_FIXED STREQUAL MULTIKEY_AES_SOURCE)
+            file(WRITE "${MULTIKEY_AES_HEADER}" "${MULTIKEY_AES_FIXED}")
+        endif()
+        configure_file("${MULTIKEY_AES_HEADER}" "${VOLEPSI_THIRDPARTY_DIR}/include/cryptoTools/Crypto/MultiKeyAES.h" COPYONLY)
+    endif()
+
     run(NAME "libOTe Build"           CMD ${BUILD_CMD}     WD ${CLONE_DIR})
     run(NAME "libOTe Install"         CMD ${INSTALL_CMD}   WD ${CLONE_DIR})
 

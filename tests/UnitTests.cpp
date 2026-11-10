@@ -55,6 +55,7 @@ namespace volePSI_Tests
 #endif
 
         t.add("RsOprf_eval_test            ", RsOprf_eval_test);
+        t.add("RsOprf_multiKeyAES_test     ", RsOprf_multiKeyAES_test);
         t.add("RsOprf_mal_test             ", RsOprf_mal_test);
         t.add("RsOprf_reduced_test         ", RsOprf_reduced_test);
                    
