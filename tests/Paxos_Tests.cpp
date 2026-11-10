@@ -5,6 +5,9 @@
 #include <cmath>
 #include <unordered_set>
 #include <random>
+#include <algorithm>
+#include <stdexcept>
+#include <vector>
 using namespace volePSI;
 
 auto& ZeroBlock = oc::ZeroBlock;
@@ -1448,6 +1451,225 @@ void Paxos_invE_g3_Test(const oc::CLP& cmd)
 	//		throw RTE_LOC;
 	//}
 
+}
+
+void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd)
+{
+	auto expectThrows = [](auto&& fn)
+	{
+		bool threw = false;
+		try
+		{
+			fn();
+		}
+		catch (const std::runtime_error&)
+		{
+			threw = true;
+		}
+		if (!threw)
+			throw RTE_LOC;
+	};
+
+	// 1. Parameter validation at init time: numItems > 0 and weight in [2, 20].
+	expectThrows([]() {
+		PaxosParam p;
+		p.init(0, 3, 40, PaxosParam::GF128);
+	});
+	for (u64 badWeight : { u64(0), u64(1), u64(21), u64(64) })
+	{
+		expectThrows([&]() {
+			PaxosParam p;
+			p.init(64, badWeight, 40, PaxosParam::GF128);
+		});
+		expectThrows([&]() {
+			Baxos b;
+			b.init(64, 32, badWeight, 40, PaxosParam::GF128, block(1, 2));
+		});
+		expectThrows([&]() {
+			PaxosParam p;
+			p.mSparseSize = 128;
+			p.mDenseSize = 40;
+			p.mWeight = badWeight;
+			Paxos<u16> paxos;
+			paxos.init(64, p, block(1, 2));
+		});
+		expectThrows([&]() {
+			PaxosHash<u16> hasher;
+			hasher.init(block(1, 2), badWeight, 128);
+		});
+	}
+	expectThrows([]() {
+		PaxosHash<u16> hasher;
+		hasher.init(block(1, 2), 3, 3);
+	});
+
+	// 2. Inclusive boundary round-trips for weight == 2 and weight == 20 (maxWeightSize).
+	{
+		PRNG prng(block(9, 10));
+		std::vector<block> items(128), values(128), decoded(128);
+		prng.get<block>(items);
+		prng.get<block>(values);
+
+		for (u64 validWeight : { u64(2), u64(20) })
+		{
+			for (u64 nt : { u64(1), u64(2) })
+			{
+				Baxos baxos;
+				baxos.init(items.size(), 64, validWeight, 40, PaxosParam::GF128, block(5, 6));
+				std::vector<block> pp(baxos.size(), oc::ZeroBlock);
+				baxos.solve<block>(items, values, pp, nullptr, nt);
+				std::fill(decoded.begin(), decoded.end(), oc::ZeroBlock);
+				baxos.decode<block>(items, decoded, pp, nt);
+				if (decoded != values)
+					throw RTE_LOC;
+			}
+		}
+	}
+
+	// 3. Runtime decode guards when fields are mutated post-init (multi-bin, single-bin,
+	// empty input, and multi-threaded).
+	std::vector<block> items(64), values(64, oc::ZeroBlock);
+	for (u64 i = 0; i < items.size(); ++i)
+		items[i] = block(3, i);
+
+	auto makeValidBaxos = [](u64 binSize = 32)
+	{
+		Baxos b;
+		b.init(64, binSize, 3, 40, PaxosParam::GF128, block(1, 2));
+		return b;
+	};
+
+	// Mutated mWeight > 20 only (desynchronized from mPaxosParam.mWeight == 3).
+	expectThrows([&]() {
+		auto b = makeValidBaxos();
+		std::vector<block> pp(b.size(), oc::ZeroBlock);
+		b.mWeight = 21;
+		b.decode<block>(items, values, pp);
+	});
+
+	// Mutated mPaxosParam.mWeight > 20 only (desynchronized from mWeight == 3).
+	expectThrows([&]() {
+		auto b = makeValidBaxos();
+		std::vector<block> pp(b.size(), oc::ZeroBlock);
+		b.mPaxosParam.mWeight = 21;
+		b.decode<block>(items, values, pp);
+	});
+
+	// Both mWeight and mPaxosParam.mWeight > 20 across multi-threaded, single-bin, and empty inputs.
+	for (u64 nt : { u64(1), u64(4) })
+	{
+		expectThrows([&]() {
+			auto b = makeValidBaxos(32);
+			std::vector<block> pp(b.size(), oc::ZeroBlock);
+			b.mWeight = 21;
+			b.mPaxosParam.mWeight = 21;
+			b.decode<block>(items, values, pp, nt);
+		});
+		expectThrows([&]() {
+			auto b = makeValidBaxos(64);
+			std::vector<block> pp(b.size(), oc::ZeroBlock);
+			b.mWeight = 21;
+			b.decode<block>(items, values, pp, nt);
+		});
+	}
+	expectThrows([&]() {
+		auto b = makeValidBaxos(32);
+		std::vector<block> pp(b.size(), oc::ZeroBlock);
+		b.mWeight = 21;
+		span<const block> emptyItems;
+		span<block> emptyValues;
+		b.decode<block>(emptyItems, emptyValues, pp, 2);
+	});
+
+	// Invalid low weights (0 and 1) mutated post-init.
+	for (u64 lowWeight : { u64(0), u64(1) })
+	{
+		expectThrows([&]() {
+			auto b = makeValidBaxos(32);
+			std::vector<block> pp(b.size(), oc::ZeroBlock);
+			b.mWeight = lowWeight;
+			b.mPaxosParam.mWeight = lowWeight;
+			b.decode<block>(items, values, pp);
+		});
+	}
+
+	// 4. Direct Baxos::implDecodeBin stack-buffer guard checks.
+	{
+		auto b = makeValidBaxos(32);
+		Paxos<u16> paxos;
+		paxos.init(1, b.mPaxosParam, b.mSeed);
+		std::vector<block> hashes(32, block(7, 8));
+		std::vector<u64> inIdxs(32, 0);
+		std::vector<block> ppVec(b.mPaxosParam.size(), oc::ZeroBlock);
+		PxVector<block> V(values);
+		auto h = V.defaultHelper();
+		auto buff = h.newVec(32);
+		PxVector<const block> PP(ppVec);
+
+		expectThrows([&]() {
+			auto bBad = b;
+			bBad.mWeight = 21;
+			bBad.implDecodeBin<u16>(0, hashes, V, buff, inIdxs, PP, h, paxos);
+		});
+		expectThrows([&]() {
+			Paxos<u16> paxosBad;
+			paxosBad.init(1, b.mPaxosParam, b.mSeed);
+			paxosBad.mHasher.mWeight = 21;
+			b.implDecodeBin<u16>(0, hashes, V, buff, inIdxs, PP, h, paxosBad);
+		});
+		expectThrows([&]() {
+			auto bZero = b;
+			Paxos<u16> paxosZero;
+			paxosZero.init(1, b.mPaxosParam, b.mSeed);
+			bZero.mWeight = 0;
+			paxosZero.mWeight = 0;
+			paxosZero.mHasher.mWeight = 0;
+			bZero.implDecodeBin<u16>(0, hashes, V, buff, inIdxs, PP, h, paxosZero);
+		});
+
+		// Direct Paxos::decode weight and hasher consistency checks.
+		expectThrows([&]() {
+			Paxos<u16> paxosBad;
+			paxosBad.init(1, b.mPaxosParam, b.mSeed);
+			paxosBad.mWeight = 21;
+			paxosBad.mHasher.mWeight = 21;
+			std::vector<block> emptyItems(1, block(1, 2));
+			std::vector<block> outValues(1, oc::ZeroBlock);
+			paxosBad.decode<block>(emptyItems, outValues, ppVec);
+		});
+		expectThrows([&]() {
+			Paxos<u16> paxosBad;
+			paxosBad.init(1, b.mPaxosParam, b.mSeed);
+			paxosBad.mWeight = 1;
+			paxosBad.mHasher.mWeight = 1;
+			std::vector<block> emptyItems(1, block(1, 2));
+			std::vector<block> outValues(1, oc::ZeroBlock);
+			paxosBad.decode<block>(emptyItems, outValues, ppVec);
+		});
+		expectThrows([&]() {
+			Paxos<u16> paxosMismatch;
+			paxosMismatch.init(1, b.mPaxosParam, b.mSeed);
+			paxosMismatch.mHasher.mWeight = 2;
+			std::vector<block> emptyItems(1, block(1, 2));
+			std::vector<block> outValues(1, oc::ZeroBlock);
+			paxosMismatch.decode<block>(emptyItems, outValues, ppVec);
+		});
+	}
+
+	// 5. Worker-thread exceptions in Baxos::implParDecode percolate up to the main thread
+	// instead of terminating the process.
+	expectThrows([]() {
+		Baxos b;
+		b.init(128, 32, 3, 40, PaxosParam::GF128, block(11, 12));
+		std::vector<block> parItems(128);
+		for (u64 i = 0; i < parItems.size(); ++i)
+			parItems[i] = block(13, i);
+		std::vector<u8> u8Values(128, 0);
+		std::vector<u8> u8Pp(b.size(), 0);
+		// GF128 dense decoding with ValueType=u8 throws std::runtime_error inside
+		// PxVector<u8>::Helper::multAdd on the worker threads.
+		b.decode<u8>(parItems, u8Values, u8Pp, 4);
+	});
 }
 
 

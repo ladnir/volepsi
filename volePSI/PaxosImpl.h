@@ -14,6 +14,9 @@
 #include "libOTe/Tools/LDPC/Util.h"
 #include "volePSI/SimpleIndex.h"
 #include <future>
+#include <exception>
+#include <stdexcept>
+#include <thread>
 
 namespace volePSI
 {
@@ -156,8 +159,10 @@ namespace volePSI
 	// See paper https://eprint.iacr.org/2022/320.pdf
 	inline void  PaxosParam::init(u64 numItems, u64 weight, u64 ssp, DenseType dt)
 	{
-		if (weight < 2)
-			throw std::runtime_error("weight must be 2 or greater.");
+		if (numItems == 0)
+			throw std::runtime_error("numItems must be greater than 0.");
+		if (weight < 2 || weight > 20)
+			throw std::runtime_error("weight must be in [2, 20].");
 
 		mWeight = weight;
 		mSsp = ssp;
@@ -175,8 +180,10 @@ namespace volePSI
 			// lambda = lambdaVsGap * g - 1.9 * lambdaVsGap
 			// g = (lambda + 1.9 * lambdaVsGap) /  lambdaVsGap
 			//   = lambda / lambdaVsGap + 1.9
+			if (!(lambdaVsGap > 0.0))
+				throw std::runtime_error("Invalid Paxos parameter domain.");
 
-			mG = static_cast<u64>(std::ceil(ssp / lambdaVsGap + 1.9));
+			mG = std::max<u64>(1, static_cast<u64>(std::ceil(ssp / lambdaVsGap + 1.9)));
 
 			mDenseSize = mG + (dt == DenseType::Binary) * ssp;
 			mSparseSize = 2 * numItems;
@@ -202,11 +209,16 @@ namespace volePSI
 			// e = (lambda - b) / lambdaVsE
 
 			double e = (ssp - b) / lambdaVsE;
-			mG = std::floor(ssp / ((weight - 2) * std::log2(e * numItems)));
+			double denom = (weight - 2) * std::log2(e * numItems);
+			if (!(denom > 0.0) || !(e > 0.0))
+				throw std::runtime_error("Invalid Paxos parameter domain.");
+			mG = std::max<u64>(1, static_cast<u64>(std::floor(ssp / denom)));
 
 			mDenseSize = mG + (dt == DenseType::Binary) * ssp;
-			mSparseSize = numItems * e;
+			mSparseSize = static_cast<u64>(numItems * e);
 		}
+		if (mSparseSize <= weight)
+			throw std::runtime_error("mSparseSize must exceed weight.");
 	}
 
 #ifdef ENABLE_SSE
@@ -758,6 +770,8 @@ namespace volePSI
 	template<typename IdxType>
 	void Paxos<IdxType>::init(u64 numItems, PaxosParam p, block seed)
 	{
+		if (p.mWeight < 2 || p.mWeight > 20)
+			throw std::runtime_error("weight must be in [2, 20].");
 		if (p.mSparseSize >= u64(std::numeric_limits<IdxType>::max()))
 		{
 			std::cout << "the size of the paxos is too large for the index type. "
@@ -921,6 +935,9 @@ namespace volePSI
 	void Paxos<IdxType>::decode(span<const block> inputs, Vec& values, ConstVec& PP, Helper& h)
 	{
 		setTimePoint("decode begin");
+
+		if (mWeight < 2 || mWeight > 20 || mHasher.mWeight != mWeight)
+			throw RTE_LOC;
 
 		if (PP.size() != size())
 			throw RTE_LOC;
@@ -3024,7 +3041,9 @@ namespace volePSI
 
 		auto main = (hashes.size() / batchSize) * batchSize;
 
-		assert(mWeight <= maxWeightSize);
+		if (mWeight < 2 || mWeight > maxWeightSize ||
+			paxos.mWeight != mWeight || paxos.mHasher.mWeight != mWeight)
+			throw RTE_LOC;
 		std::array<IdxType, maxWeightSize* batchSize> _backing;
 		MatrixView<IdxType> row(_backing.data(), batchSize, mWeight);
 		assert(valuesBuff.size() >= batchSize);
@@ -3180,6 +3199,11 @@ namespace volePSI
 		Helper& h,
 		u64 numThreads)
 	{
+		constexpr u64 maxWeightSize = 20;
+		if (mWeight < 2 || mWeight > maxWeightSize ||
+			mPaxosParam.mWeight != mWeight)
+			throw RTE_LOC;
+
 		if (mNumBins == 1)
 		{
 			Paxos<IdxType> paxos;
@@ -3193,22 +3217,51 @@ namespace volePSI
 		numThreads = std::max<u64>(numThreads, 1ull);
 
 		std::vector<std::thread> thrds(numThreads - 1);
+		std::vector<std::exception_ptr> exs(numThreads);
 		auto routine = [&](u64 i)
 		{
-			auto begin = (inputs.size() * i) / numThreads;
-			auto end = (inputs.size() * (i + 1)) / numThreads;
-			span<const block> in(inputs.begin() + begin, inputs.begin() + end);
-			auto va = values.subspan(begin, end - begin);
-			implDecodeBatch<IdxType>(in, va, pp, h);
+			try
+			{
+				auto begin = (inputs.size() * i) / numThreads;
+				auto end = (inputs.size() * (i + 1)) / numThreads;
+				span<const block> in(inputs.begin() + begin, inputs.begin() + end);
+				auto va = values.subspan(begin, end - begin);
+				implDecodeBatch<IdxType>(in, va, pp, h);
+			}
+			catch (...)
+			{
+				exs[i] = std::current_exception();
+			}
 		};
 
-		for (u64 i = 0; i < thrds.size(); ++i)
-			thrds[i] = std::thread(routine, i);
+		try
+		{
+			for (u64 i = 0; i < thrds.size(); ++i)
+				thrds[i] = std::thread(routine, i);
 
-		routine(thrds.size());
+			routine(thrds.size());
+		}
+		catch (...)
+		{
+			for (u64 i = 0; i < thrds.size(); ++i)
+			{
+				if (thrds[i].joinable())
+					thrds[i].join();
+			}
+			throw;
+		}
 
 		for (u64 i = 0; i < thrds.size(); ++i)
-			thrds[i].join();
+		{
+			if (thrds[i].joinable())
+				thrds[i].join();
+		}
+
+		for (u64 i = 0; i < exs.size(); ++i)
+		{
+			if (exs[i])
+				std::rethrow_exception(exs[i]);
+		}
 	}
 
 
