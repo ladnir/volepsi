@@ -9,6 +9,12 @@
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
+#include <atomic>
+#include <exception>
+#include <stdexcept>
+#include <thread>
+#include <vector>
+#include "cryptoTools/Common/Defines.h"
 #include <unordered_set>
 #include <numeric>
 #include "libOTe/Tools/LDPC/Util.h"
@@ -2727,11 +2733,16 @@ namespace volePSI
 		AES hasher(mSeed);
 
 		std::atomic<u64> numDone(0);
+		std::atomic<bool> failed(false);
+		std::vector<std::exception_ptr> exs(numThreads);
 		std::promise<void> hashingDoneProm;
 		auto hashingDoneFu = hashingDoneProm.get_future().share();
 
 		auto routine = [&](u64 thrdIdx)
 		{
+			bool countedDone = false;
+			try
+			{
 			auto begin = (inputs_.size() * thrdIdx) / numThreads;
 			auto end = (inputs_.size() * (thrdIdx + 1)) / numThreads;
 			auto inputs = inputs_.subspan(begin, end - begin);
@@ -2771,6 +2782,8 @@ namespace volePSI
 					for (u64 k = 0; k < batchSize; ++k, ++inIdx)
 					{
 						auto binIdx = binIdxs[k];
+						if (binSizes[binIdx] >= perThrdMaxBinSize)
+							throw RTE_LOC;
 						auto bs = binSizes[binIdx]++;
 						getInputMapping(thrdIdx, binIdx)[bs] = inIdx;
 						h.assign(getValues(thrdIdx, binIdx)[bs], vals_[inIdx]);
@@ -2783,8 +2796,9 @@ namespace volePSI
 					hashes[k] = hasher.hashBlock(*inIter);
 
 					auto binIdx = modNumBins(hashes[k]);
+					if (binSizes[binIdx] >= perThrdMaxBinSize)
+						throw RTE_LOC;
 					auto bs = binSizes[binIdx]++;
-					assert(bs < perThrdMaxBinSize);
 
 					if (inIdx == 9355778)
 						std::cout << "in " << inIdx << " -> bin " << binIdx << " @ " << bs << std::endl;
@@ -2807,10 +2821,14 @@ namespace volePSI
 
 
 			// block until all threads have mapped all items. 
+			countedDone = true;
 			if (++numDone == numThreads)
 				hashingDoneProm.set_value();
 			else
 				hashingDoneFu.get();
+
+			if (failed.load(std::memory_order_acquire))
+				return;
 
 			Paxos<IdxType> paxos;
 
@@ -2929,17 +2947,53 @@ namespace volePSI
 				paxos.encode(values, output, h, prng);
 
 			}
+			}
+			catch (...)
+			{
+				exs[thrdIdx] = std::current_exception();
+				failed.store(true, std::memory_order_release);
+				if (!countedDone && ++numDone == numThreads)
+					hashingDoneProm.set_value();
+			}
 		};
 
 		std::vector<std::thread> thrds(numThreads - 1);
+		try
+		{
+			for (u64 i = 0; i < thrds.size(); ++i)
+				thrds[i] = std::thread(routine, i);
+
+			routine(thrds.size());
+		}
+		catch (...)
+		{
+			failed.store(true, std::memory_order_release);
+			try
+			{
+				hashingDoneProm.set_exception(std::current_exception());
+			}
+			catch (...)
+			{
+			}
+			for (u64 i = 0; i < thrds.size(); ++i)
+			{
+				if (thrds[i].joinable())
+					thrds[i].join();
+			}
+			throw;
+		}
 
 		for (u64 i = 0; i < thrds.size(); ++i)
-			thrds[i] = std::thread(routine, i);
+		{
+			if (thrds[i].joinable())
+				thrds[i].join();
+		}
 
-		routine(thrds.size());
-
-		for (u64 i = 0; i < thrds.size(); ++i)
-			thrds[i].join();
+		for (u64 i = 0; i < exs.size(); ++i)
+		{
+			if (exs[i])
+				std::rethrow_exception(exs[i]);
+		}
 	}
 
 	template<typename ValueType>

@@ -5,6 +5,10 @@
 #include <cmath>
 #include <unordered_set>
 #include <random>
+#include "cryptoTools/Crypto/AES.h"
+#include "volePSI/SimpleIndex.h"
+#include <stdexcept>
+#include <vector>
 using namespace volePSI;
 
 auto& ZeroBlock = oc::ZeroBlock;
@@ -1449,5 +1453,90 @@ void Paxos_invE_g3_Test(const oc::CLP& cmd)
 	//}
 
 }
+
+void Baxos_bin_size_and_overflow_Test(const oc::CLP&)
+{
+    auto expectThrows = [](auto&& fn)
+    {
+        bool threw = false;
+        try
+        {
+            fn();
+        }
+        catch (const std::runtime_error&)
+        {
+            threw = true;
+        }
+        if (!threw)
+            throw RTE_LOC;
+    };
+
+    // 1. SimpleIndex::get_bin_size 2D interpolation and small-ball saturation bounds.
+    if (SimpleIndex::get_bin_size(5, 2048, 40, true) < 410)
+        throw RTE_LOC;
+    if (SimpleIndex::get_bin_size(5, 4095, 40, true) < 819)
+        throw RTE_LOC;
+    if (SimpleIndex::get_bin_size(3, 32, 40, true) < 30)
+        throw RTE_LOC;
+    if (SimpleIndex::get_bin_size(3, 24, 40, true) < 24)
+        throw RTE_LOC;
+    if (SimpleIndex::get_bin_size(2, 50, 40, true) < 48)
+        throw RTE_LOC;
+    if (SimpleIndex::get_bin_size(3, 64, 80, true) < 60)
+        throw RTE_LOC;
+
+    // 2. Non-power-of-two, non-32-aligned Baxos solve/decode round-trip.
+    {
+        const u64 numItems = 4095;
+        const u64 binSize = 819;
+        Baxos baxos;
+        baxos.init(numItems, binSize, 3, 40, PaxosParam::GF128, block(7, 11));
+        PRNG prng(block(13, 17));
+        std::vector<block> items(numItems), values(numItems), decoded(numItems);
+        prng.get(items.data(), items.size());
+        prng.get(values.data(), values.size());
+        for (u64 nt : { u64(1), u64(4) })
+        {
+            std::vector<block> table(baxos.size(), ZeroBlock);
+            baxos.solve<block>(items, values, table, nullptr, nt);
+            baxos.decode<block>(items, decoded, table, nt);
+            if (decoded != values)
+                throw RTE_LOC;
+        }
+    }
+
+    // 3. SimpleIndex::insertItems throws on bin capacity overflow.
+    expectThrows([]() {
+        SimpleIndex index;
+        index.init(8, 100, 40, 3);
+        std::vector<block> duplicateItems(100, ZeroBlock);
+        index.insertItems(duplicateItems, ZeroBlock);
+    });
+
+    // 4. Baxos::solve throws on single-threaded and multi-threaded (batch loop,
+    // scalar tail loop, and post-barrier merge) bin overflow without calling
+    // std::terminate() or deadlocking on hashingDoneFu.
+    struct OverflowCase { u64 numItems, binSize, nt; };
+    for (auto c : { OverflowCase{200, 50, 1}, {320, 80, 4}, {200, 50, 4}, {80, 40, 4} })
+    {
+        expectThrows([c]() {
+            Baxos baxos;
+            baxos.init(c.numItems, c.binSize, 3, 40, PaxosParam::GF128, ZeroBlock);
+            oc::AES hasher(baxos.mSeed);
+            std::vector<block> collidingKeys;
+            collidingKeys.reserve(c.numItems);
+            for (u64 candidate = 1; collidingKeys.size() < c.numItems; ++candidate)
+            {
+                block b(0, candidate);
+                if (baxos.modNumBins(hasher.hashBlock(b)) == 0)
+                    collidingKeys.push_back(b);
+            }
+            std::vector<block> values(c.numItems, oc::OneBlock);
+            std::vector<block> out(baxos.size(), ZeroBlock);
+            baxos.solve<block>(collidingKeys, values, out, nullptr, c.nt);
+        });
+    }
+}
+
 
 

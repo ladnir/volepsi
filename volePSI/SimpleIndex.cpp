@@ -4,7 +4,11 @@
 #include "cryptoTools/Crypto/PRNG.h"
 #include "cryptoTools/Common/Log.h"
 #include "cryptoTools/Common/CuckooIndex.h"
+#include <algorithm>
 #include <cassert>
+#include <cmath>
+#include <stdexcept>
+#include "cryptoTools/Common/Defines.h"
 
 #ifdef ENABLE_BOOST
 #include <boost/math/special_functions/binomial.hpp>
@@ -262,12 +266,16 @@ namespace volePSI
 
             // interpolate a linear 2d spline between the serounding points (a surface).
             // Then evalate the surface at out bin,ball coordinate.
-            if (numBinsHgh < sizes.size() && numBallsHgh < sizes[numBinsHgh].size())
+            if (numBinsHgh < sizes.size() &&
+                numBallsHgh < sizes[numBinsLow].size() &&
+                numBallsHgh < sizes[numBinsHgh].size())
             {
-                auto a0 = (diffBin)*sizes[numBinsLow][numBallsLow] + (1 - diffBin) * sizes[numBinsLow][numBallsHgh];
-                auto a1 = (diffBin)*sizes[numBinsHgh][numBallsLow] + (1 - diffBin) * sizes[numBinsHgh][numBallsHgh];
+                auto a0 = (1.0 - diffBall) * sizes[numBinsLow][numBallsLow] + diffBall * sizes[numBinsLow][numBallsHgh];
+                auto a1 = (1.0 - diffBall) * sizes[numBinsHgh][numBallsLow] + diffBall * sizes[numBinsHgh][numBallsHgh];
 
-                auto b0 = (diffBall)*a0 + (1 - diffBall) * a1;
+                auto b0 = (1.0 - diffBin) * a0 + diffBin * a1;
+                if (sizes[numBinsLow][numBallsLow] == numBallsLow)
+                    b0 = std::max(b0, std::min<double>(std::log2(numBalls), sizes[numBinsLow][numBallsHgh]));
 
                 auto B = std::ceil(std::pow(2, b0));
 
@@ -361,6 +369,8 @@ namespace volePSI
                 for(u64 k = 0; k < min; ++k)
                 {
                     auto loc = locations(k,j);
+                    if (mBinSizes[loc] >= mMaxBinSize)
+                        throw RTE_LOC;
                     mBins(loc, mBinSizes[loc]++).set(i+k, j);
                 }
             }
