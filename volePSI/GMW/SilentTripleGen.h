@@ -45,6 +45,15 @@ namespace volePSI
         span<block> recvMsgP,
         span<std::array<block, 2>> sendMsgP);
 
+    // Portable versions of the SSE intrinsics used by SilentTripleGen::expand (defined in the
+    // .cpp, used there when ENABLE_SSE is off). Declared here so the tests can check them.
+    namespace portable
+    {
+        block shuffle_epi8(const block& a, const block& b);
+        block slli_epi16(const block& a, int imm);
+        int movemask_epi8(const block& a);
+    }
+
     class SilentTripleGen : public oc::TimerAdapter
     {
     public:

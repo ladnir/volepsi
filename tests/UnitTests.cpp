@@ -36,6 +36,7 @@ namespace volePSI_Tests
         
 #ifdef VOLE_PSI_ENABLE_GMW
         t.add("SilentTripleGen_test        ", SilentTripleGen_test);
+        t.add("SilentTripleGen_portable_test", SilentTripleGen_portable_test);
         //t.add("IknpTripleGen_test          ", IknpTripleGen_test);
         t.add("generateBase_test           ", generateBase_test);
 

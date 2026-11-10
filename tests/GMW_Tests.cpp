@@ -9,6 +9,8 @@
 #include "Common.h"
 #include "coproto/Socket/LocalAsyncSock.h"
 #include <numeric>
+#include <bit>
+#include <cstring>
 
 using namespace volePSI;
 using coproto::LocalAsyncSocket;
@@ -118,6 +120,20 @@ void SilentTripleGen_test()
             //if (neq((t1.mA[i] & t0.mC[i]) ^ t1.mB[i], t0.mD[i]))
             //    throw std::runtime_error("");
         }
+
+        // The relation above also holds for all-zero shares (0 & c ^ 0 == 0), and zero shares
+        // mask nothing in GMW. Require each share vector to have about half its bits set.
+        {
+            const u64 bits = static_cast<u64>(t0.mMult.size()) * 128;
+            for (auto v : { t0.mMult, t0.mAdd, t1.mMult, t1.mAdd })
+            {
+                u64 ones = 0;
+                for (auto& b : v)
+                    ones += std::popcount(b.get<u64>(0)) + std::popcount(b.get<u64>(1));
+                if (ones < bits / 4 || ones > 3 * bits / 4)
+                    throw RTE_LOC;  // degenerate triple shares
+            }
+        }
     }
     //void validate(coproto::Socket & chl);
 
@@ -134,6 +150,57 @@ void SilentTripleGen_test()
 
     //    oc::lout << "pp " << 0 << " " << b << std::endl;
     //}
+}
+
+
+// The portable replacements for the SSE intrinsics in SilentTripleGen::expand, checked against
+// the intrinsics' definitions (and against the intrinsics themselves where they exist).
+void SilentTripleGen_portable_test()
+{
+    oc::PRNG prng(oc::CCBlock);
+    for (u64 t = 0; t < 2000; ++t)
+    {
+        block a = prng.get<block>(), b = prng.get<block>();
+        if (t % 4 == 0)
+        {
+            // the masks expand() uses: every byte 0x80 except one zero byte
+            memset(&b, 1 << 7, sizeof(b));
+            b.set<u8>(t / 4 % 16, 0);
+        }
+
+        std::array<u8, 16> av, bv, ex;
+        memcpy(av.data(), &a, 16);
+        memcpy(bv.data(), &b, 16);
+        for (u64 i = 0; i < 16; ++i)
+            ex[i] = (bv[i] & 128) ? 0 : av[bv[i] & 15];
+        block s = portable::shuffle_epi8(a, b);
+        if (memcmp(&s, ex.data(), 16))
+            throw RTE_LOC;
+
+        int mm = 0;
+        for (u64 i = 0; i < 16; ++i)
+            mm |= int(av[i] >> 7) << i;
+        if (portable::movemask_epi8(a) != mm)
+            throw RTE_LOC;
+
+        for (int imm = 0; imm < 16; ++imm)
+        {
+            block sl = portable::slli_epi16(a, imm);
+            for (u64 i = 0; i < 8; ++i)
+                if (sl.get<u16>(i) != static_cast<u16>(a.get<u16>(i) << imm))
+                    throw RTE_LOC;
+#ifdef ENABLE_SSE
+            if (neq(sl, block(_mm_slli_epi16(a, imm))))
+                throw RTE_LOC;
+#endif
+        }
+#ifdef ENABLE_SSE
+        if (neq(s, block(_mm_shuffle_epi8(a, b))))
+            throw RTE_LOC;
+        if (mm != _mm_movemask_epi8(a))
+            throw RTE_LOC;
+#endif
+    }
 }
 
 
