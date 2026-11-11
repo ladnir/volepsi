@@ -162,6 +162,8 @@ namespace volePSI
 	// See paper https://eprint.iacr.org/2022/320.pdf
 	inline void  PaxosParam::init(u64 numItems, u64 weight, u64 ssp, DenseType dt)
 	{
+		if (numItems == 0)
+			throw std::runtime_error("numItems must be greater than 0.");
 		if (weight < 2)
 			throw std::runtime_error("weight must be 2 or greater.");
 
@@ -169,6 +171,16 @@ namespace volePSI
 		mSsp = ssp;
 		mDt = dt;
 
+		if (dt != DenseType::Binary && dt != DenseType::GF128)
+			throw std::runtime_error("Invalid Paxos dense type.");
+
+		// Check before conversion: an out-of-range floating-to-integer cast is UB.
+		auto checkedSize = [](double size) -> u64
+		{
+			if (!std::isfinite(size) || size < 0 || size >= std::ldexp(1.0, 64))
+				throw std::runtime_error("Paxos parameters exceed the supported size range.");
+			return static_cast<u64>(size);
+		};
 		double logN = std::log2(numItems);
 
 		if (weight == 2)
@@ -181,10 +193,13 @@ namespace volePSI
 			// lambda = lambdaVsGap * g - 1.9 * lambdaVsGap
 			// g = (lambda + 1.9 * lambdaVsGap) /  lambdaVsGap
 			//   = lambda / lambdaVsGap + 1.9
+			if (!(lambdaVsGap > 0.0))
+				throw std::runtime_error("Invalid Paxos parameter domain.");
 
-			mG = static_cast<u64>(std::ceil(ssp / lambdaVsGap + 1.9));
+			mG = checkedSize(std::ceil(ssp / lambdaVsGap + 1.9));
 
-			mDenseSize = mG + (dt == DenseType::Binary) * ssp;
+			if (numItems > std::numeric_limits<u64>::max() / 2)
+				throw std::runtime_error("Paxos sparse size overflow.");
 			mSparseSize = 2 * numItems;
 		}
 		else
@@ -208,11 +223,20 @@ namespace volePSI
 			// e = (lambda - b) / lambdaVsE
 
 			double e = (ssp - b) / lambdaVsE;
-			mG = std::floor(ssp / ((weight - 2) * std::log2(e * numItems)));
-
-			mDenseSize = mG + (dt == DenseType::Binary) * ssp;
-			mSparseSize = numItems * e;
+			double denom = (weight - 2) * std::log2(e * numItems);
+			if (!(denom > 0.0) || !(e > 0.0))
+				throw std::runtime_error("Invalid Paxos parameter domain.");
+			mG = checkedSize(std::floor(ssp / denom));
+			mSparseSize = checkedSize(numItems * e);
 		}
+		// GF128 decoding always reads its first dense column. The fitted gap
+		// estimate can round to zero at high weights, so reserve that column.
+		if (dt == DenseType::GF128)
+			mG = std::max<u64>(1, mG);
+		if (dt == DenseType::Binary && mG > std::numeric_limits<u64>::max() - ssp)
+			throw std::runtime_error("Paxos dense size overflow.");
+		mDenseSize = mG + (dt == DenseType::Binary ? ssp : 0);
+		validate();
 	}
 
 #ifdef ENABLE_SSE
@@ -764,6 +788,9 @@ namespace volePSI
 	template<typename IdxType>
 	void Paxos<IdxType>::init(u64 numItems, PaxosParam p, block seed)
 	{
+		p.validate();
+		if (numItems > u64(std::numeric_limits<IdxType>::max()))
+			throw RTE_LOC;
 		if (p.mSparseSize >= u64(std::numeric_limits<IdxType>::max()))
 		{
 			std::cout << "the size of the paxos is too large for the index type. "
@@ -927,6 +954,10 @@ namespace volePSI
 	void Paxos<IdxType>::decode(span<const block> inputs, Vec& values, ConstVec& PP, Helper& h)
 	{
 		setTimePoint("decode begin");
+
+		validate();
+		if (!mHasher.isConfiguredFor(mWeight, mSparseSize) || values.size() < inputs.size())
+			throw RTE_LOC;
 
 		if (PP.size() != size())
 			throw RTE_LOC;
@@ -3080,12 +3111,13 @@ namespace volePSI
 		Paxos<IdxType>& paxos)
 	{
 		constexpr u64 batchSize = 32;
-		constexpr u64 maxWeightSize = 20;
-
 		auto main = (hashes.size() / batchSize) * batchSize;
 
-		assert(mWeight <= maxWeightSize);
-		std::array<IdxType, maxWeightSize* batchSize> _backing;
+		paxos.validate();
+		if (mWeight < 2 || mWeight > maxWeight || paxos.mWeight != mWeight ||
+			!paxos.mHasher.isConfiguredFor(mWeight, paxos.mSparseSize))
+			throw RTE_LOC;
+		std::array<IdxType, maxWeight * batchSize> _backing;
 		MatrixView<IdxType> row(_backing.data(), batchSize, mWeight);
 		assert(valuesBuff.size() >= batchSize);
 		//std::array<block, decodeSize> vals;
@@ -3240,6 +3272,13 @@ namespace volePSI
 		Helper& h,
 		u64 numThreads)
 	{
+		mPaxosParam.validate();
+		if (mWeight < 2 || mWeight > maxWeight || mPaxosParam.mWeight != mWeight ||
+			!mNumBins || pp.size() != size() || values.size() < inputs.size())
+			throw RTE_LOC;
+		if (inputs.empty())
+			return;
+
 		if (mNumBins == 1)
 		{
 			Paxos<IdxType> paxos;
@@ -3250,25 +3289,59 @@ namespace volePSI
 		}
 
 
-		numThreads = std::max<u64>(numThreads, 1ull);
+		// Avoid worker-exception bookkeeping allocations in the single-threaded path.
+		if (numThreads <= 1)
+		{
+			implDecodeBatch<IdxType>(inputs, values, pp, h);
+			return;
+		}
 
 		std::vector<std::thread> thrds(numThreads - 1);
+		std::vector<std::exception_ptr> exs(numThreads);
 		auto routine = [&](u64 i)
 		{
-			auto begin = (inputs.size() * i) / numThreads;
-			auto end = (inputs.size() * (i + 1)) / numThreads;
-			span<const block> in(inputs.begin() + begin, inputs.begin() + end);
-			auto va = values.subspan(begin, end - begin);
-			implDecodeBatch<IdxType>(in, va, pp, h);
+			try
+			{
+				auto begin = (inputs.size() * i) / numThreads;
+				auto end = (inputs.size() * (i + 1)) / numThreads;
+				auto in = inputs.subspan(begin, end - begin);
+				auto va = values.subspan(begin, end - begin);
+				implDecodeBatch<IdxType>(in, va, pp, h);
+			}
+			catch (...)
+			{
+				exs[i] = std::current_exception();
+			}
 		};
 
-		for (u64 i = 0; i < thrds.size(); ++i)
-			thrds[i] = std::thread(routine, i);
+		try
+		{
+			for (u64 i = 0; i < thrds.size(); ++i)
+				thrds[i] = std::thread(routine, i);
 
-		routine(thrds.size());
+			routine(thrds.size());
+		}
+		catch (...)
+		{
+			for (u64 i = 0; i < thrds.size(); ++i)
+			{
+				if (thrds[i].joinable())
+					thrds[i].join();
+			}
+			throw;
+		}
 
 		for (u64 i = 0; i < thrds.size(); ++i)
-			thrds[i].join();
+		{
+			if (thrds[i].joinable())
+				thrds[i].join();
+		}
+
+		for (u64 i = 0; i < exs.size(); ++i)
+		{
+			if (exs[i])
+				std::rethrow_exception(exs[i]);
+		}
 	}
 
 

@@ -35,6 +35,7 @@ namespace volePSI_Tests
         t.add("Baxos_solve_rand_Test       ", Baxos_solve_rand_Test);
         t.add("Baxos_bin_overflow_Test", Baxos_bin_overflow_Test);
         t.add("Baxos_bin_size_Test", Baxos_bin_size_Test);
+        t.add("Baxos_decode_weight_overflow_Test", Baxos_decode_weight_overflow_Test);
         
 #ifdef VOLE_PSI_ENABLE_GMW
         t.add("SilentTripleGen_test        ", SilentTripleGen_test);

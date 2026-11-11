@@ -15,6 +15,7 @@
 #include <iomanip>
 #include <cmath>
 #include <stdexcept>
+#include <limits>
 
 #include "volePSI/Defines.h"
 
@@ -55,6 +56,15 @@ namespace volePSI
 
 		// computes the paxos parameters based the parameters.
 		void init(u64 numItems, u64 weight = 3, u64 ssp = 40, DenseType dt = DenseType::GF128);
+
+		// Validate dimensions supplied directly or changed after initialization.
+		void validate() const
+		{
+			if (mWeight < 2 || mSparseSize < mWeight || mG > mDenseSize ||
+				mDenseSize > std::numeric_limits<u64>::max() - mSparseSize ||
+				(mDt == GF128 ? mDenseSize == 0 : mDt != Binary || mDenseSize > 64))
+				throw std::runtime_error("Invalid Paxos dimensions or dense type.");
+		}
 
 		// the size of the paxos data structure.
 		u64 size() const
@@ -421,6 +431,7 @@ namespace volePSI
 	class Baxos
 	{
 	public:
+		static constexpr u64 maxWeight = 20;
 		u64 mNumItems = 0, mNumBins = 0, mItemsPerBin = 0, mWeight = 0, mSsp = 0;
 
 		// the parameters used on a single bim.
@@ -436,6 +447,8 @@ namespace volePSI
 		// initialize the paxos with the given parameter.
 		void init(u64 numItems, u64 binSize, u64 weight, u64 ssp, PaxosParam::DenseType dt, block seed)
 		{
+			if (weight < 2 || weight > maxWeight)
+				throw std::runtime_error("Baxos weight must be in [2, 20].");
 			if (!numItems || !binSize)
 				throw std::invalid_argument("Baxos requires positive item/bin sizes.");
 			mNumItems = numItems;
