@@ -74,7 +74,6 @@ void SilentTripleGen_test()
 {
 
     u64 n = 4864;
-    u64 bs = 1000000;
     u64 nt = 1;
     //Mode mode = Mode::Dual;
 
@@ -82,7 +81,8 @@ void SilentTripleGen_test()
     auto sockets = LocalAsyncSocket::makePair();
 
 
-    for (u64 t = 0; t < 3; ++t)
+    // Exercise the base-OT choice slices across one and multiple batches.
+    for (u64 bs : {1000000ull, 1024ull, 2048ull})
     {
         t0.init(n, bs, nt, Mode::Receiver, oc::ZeroBlock);
         t1.init(n, bs, nt, Mode::Sender, oc::OneBlock);
