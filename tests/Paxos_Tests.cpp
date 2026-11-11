@@ -9,6 +9,7 @@
 #include "volePSI/SimpleIndex.h"
 #include <stdexcept>
 #include <vector>
+#include <limits>
 using namespace volePSI;
 
 auto& ZeroBlock = oc::ZeroBlock;
@@ -1454,6 +1455,88 @@ void Paxos_invE_g3_Test(const oc::CLP& cmd)
 
 }
 
+void Baxos_bin_size_Test(const oc::CLP&)
+{
+    // Independent binomial-tail references. Each minimum bounds overflow
+    // across all bins and sets by 2^-(ssp+1), including the composition bit.
+    struct Case { u64 bins, balls, ssp, sets, minimum; };
+    for (auto q : { Case{5, 2048, 40, 1, 548}, {16, 131073, 60, 1, 9006},
+        {32, 1048576, 80, 1, 34676}, {32, 1048576, 40, 1, 34132},
+        {32, 131072, 40, 8, 4601}, {64, 131072, 40, 8, 2415},
+        {1048576, 1048576, 40, 1, 19}, {1048576, 1024, 80, 1, 8} })
+    {
+        auto cap = SimpleIndex::get_bin_size(q.bins, q.balls, q.ssp, true, q.sets);
+        // Also prevent a vacuous implementation that reserves all items.
+        if (cap < q.minimum || cap > q.minimum + (q.minimum + 39) / 40 + 3)
+            throw RTE_LOC;
+        if (cap != SimpleIndex::get_bin_size(q.bins, q.balls, q.ssp, false, q.sets))
+            throw RTE_LOC;
+    }
+
+    // Directly sum small binomial tails; this does not reuse the sizing bound.
+    for (u64 bins : {2, 3, 5, 16, 64})
+        for (u64 balls : {1, 8, 24, 32, 50, 128, 200})
+            for (u64 ssp : {0, 40, 60, 80})
+                for (u64 sets : {1, 8})
+                {
+                    auto cap = SimpleIndex::get_bin_size(bins, balls, ssp, true, sets);
+                    if (cap > balls || cap < (balls + bins - 1) / bins)
+                        throw RTE_LOC;
+                    if (cap == balls)
+                        continue;
+                    long double p = 1.0L / bins;
+                    long double term = std::pow(1 - p, static_cast<int>(balls));
+                    long double tail = 0;
+                    for (u64 k = 0; k <= balls; ++k)
+                    {
+                        if (k > cap)
+                            tail += term;
+                        term *= (static_cast<long double>(balls - k) / (k + 1)) * p / (1 - p);
+                    }
+                    if (tail * bins * sets > std::ldexp(1.0L, -static_cast<int>(ssp + 1)))
+                        throw RTE_LOC;
+                }
+
+    auto max = std::numeric_limits<u64>::max();
+    for (u64 balls : {u64(0), u64(1), (u64(1) << 53) + 1, max})
+        for (u64 bins : {u64(1), u64(2), u64(3), max})
+        {
+            auto cap = SimpleIndex::get_bin_size(bins, balls, 80, true, max);
+            if (cap > balls || cap < balls / bins + (balls % bins != 0))
+                throw RTE_LOC;
+        }
+
+    auto expectInvalid = [](auto&& fn)
+    {
+        try { fn(); }
+        catch (const std::invalid_argument&) { return; }
+        throw RTE_LOC;
+    };
+    expectInvalid([] { SimpleIndex::get_bin_size(0, 100, 40); });
+    expectInvalid([] { SimpleIndex::get_bin_size(2, 100, 40, true, 0); });
+    expectInvalid([] { SimpleIndex::get_bin_size(1, 0, 81); });
+    expectInvalid([] { Baxos b; b.init(100, 20, 3, 81, PaxosParam::GF128, ZeroBlock); });
+    expectInvalid([] { Baxos b; b.init(100, 0, 3, 40, PaxosParam::GF128, ZeroBlock); });
+
+    // Exercise the former non-power-of-two interpolation failure in a real
+    // solve/decode, including per-thread allocation and a non-32-aligned tail.
+    PRNG prng(block(13, 17));
+    std::vector<block> items(4095), values(4095), decoded(4095);
+    prng.get(items.data(), items.size());
+    prng.get(values.data(), values.size());
+    for (u64 ssp : {40, 80})
+        for (u64 threads : {1, 4})
+        {
+            Baxos b;
+            b.init(items.size(), 819, 3, ssp, PaxosParam::GF128, block(7, 11));
+            std::vector<block> table(b.size(), ZeroBlock);
+            b.solve<block>(items, values, table, nullptr, threads);
+            b.decode<block>(items, decoded, table, threads);
+            if (decoded != values)
+                throw RTE_LOC;
+        }
+}
+
 void Baxos_bin_overflow_Test(const oc::CLP&)
 {
     auto expectThrows = [](auto&& fn, const char* message)
@@ -1500,7 +1583,7 @@ void Baxos_bin_overflow_Test(const oc::CLP&)
         Baxos baxos;
         baxos.init(c.numItems, c.binSize, 3, 40, PaxosParam::GF128, ZeroBlock);
         auto perThread = c.numItems / c.nt;
-        auto capacity = Baxos::getBinSize(baxos.mNumBins, perThread, baxos.mSsp);
+        auto capacity = Baxos::getBinSize(baxos.mNumBins, perThread, baxos.mSsp, c.nt);
         auto main = perThread / 32 * 32;
         if ((c.stage == Batch && capacity >= main) ||
             (c.stage == Tail && (capacity < main || capacity >= perThread)) ||

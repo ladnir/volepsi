@@ -2562,9 +2562,9 @@ namespace volePSI
 	template class Paxos<u16>;
 	template class Paxos<u8>;
 
-	inline u64 Baxos::getBinSize(u64 numBins, u64 numBalls, u64 statSecParam)
+	inline u64 Baxos::getBinSize(u64 numBins, u64 numBalls, u64 statSecParam, u64 numBinSets)
 	{
-		return SimpleIndex::get_bin_size(numBins, numBalls, statSecParam);
+		return SimpleIndex::get_bin_size(numBins, numBalls, statSecParam, true, numBinSets);
 	}
 
 	template<typename ValueType>
@@ -2681,10 +2681,10 @@ namespace volePSI
 		// total number of bins between all threads.
 		auto totalNumBins = mNumBins * numThreads;
 
-		auto itemsPerThrd = (mNumItems + numThreads - 1) / numThreads;
+		auto itemsPerThrd = mNumItems / numThreads + (mNumItems % numThreads != 0);
 
 		// maximum number of items any single thread will map to a bin.
-		auto perThrdMaxBinSize = getBinSize(mNumBins, itemsPerThrd, mSsp);
+		auto perThrdMaxBinSize = getBinSize(mNumBins, itemsPerThrd, mSsp, numThreads);
 
 		// the combined max size of the i'th bin held by each thread.
 		u64 combinedMaxBinSize = perThrdMaxBinSize * numThreads;
