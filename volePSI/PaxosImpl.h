@@ -20,9 +20,6 @@
 #include "libOTe/Tools/LDPC/Util.h"
 #include "volePSI/SimpleIndex.h"
 #include <future>
-#include <exception>
-#include <stdexcept>
-#include <thread>
 
 namespace volePSI
 {
@@ -167,13 +164,23 @@ namespace volePSI
 	{
 		if (numItems == 0)
 			throw std::runtime_error("numItems must be greater than 0.");
-		if (weight < 2 || weight > 20)
-			throw std::runtime_error("weight must be in [2, 20].");
+		if (weight < 2)
+			throw std::runtime_error("weight must be 2 or greater.");
 
 		mWeight = weight;
 		mSsp = ssp;
 		mDt = dt;
 
+		if (dt != DenseType::Binary && dt != DenseType::GF128)
+			throw std::runtime_error("Invalid Paxos dense type.");
+
+		// Check before conversion: an out-of-range floating-to-integer cast is UB.
+		auto checkedSize = [](double size) -> u64
+		{
+			if (!std::isfinite(size) || size < 0 || size >= std::ldexp(1.0, 64))
+				throw std::runtime_error("Paxos parameters exceed the supported size range.");
+			return static_cast<u64>(size);
+		};
 		double logN = std::log2(numItems);
 
 		if (weight == 2)
@@ -189,9 +196,10 @@ namespace volePSI
 			if (!(lambdaVsGap > 0.0))
 				throw std::runtime_error("Invalid Paxos parameter domain.");
 
-			mG = std::max<u64>(1, static_cast<u64>(std::ceil(ssp / lambdaVsGap + 1.9)));
+			mG = checkedSize(std::ceil(ssp / lambdaVsGap + 1.9));
 
-			mDenseSize = mG + (dt == DenseType::Binary) * ssp;
+			if (numItems > std::numeric_limits<u64>::max() / 2)
+				throw std::runtime_error("Paxos sparse size overflow.");
 			mSparseSize = 2 * numItems;
 		}
 		else
@@ -218,13 +226,17 @@ namespace volePSI
 			double denom = (weight - 2) * std::log2(e * numItems);
 			if (!(denom > 0.0) || !(e > 0.0))
 				throw std::runtime_error("Invalid Paxos parameter domain.");
-			mG = std::max<u64>(1, static_cast<u64>(std::floor(ssp / denom)));
-
-			mDenseSize = mG + (dt == DenseType::Binary) * ssp;
-			mSparseSize = static_cast<u64>(numItems * e);
+			mG = checkedSize(std::floor(ssp / denom));
+			mSparseSize = checkedSize(numItems * e);
 		}
-		if (mSparseSize <= weight)
-			throw std::runtime_error("mSparseSize must exceed weight.");
+		// GF128 decoding always reads its first dense column. The fitted gap
+		// estimate can round to zero at high weights, so reserve that column.
+		if (dt == DenseType::GF128)
+			mG = std::max<u64>(1, mG);
+		if (dt == DenseType::Binary && mG > std::numeric_limits<u64>::max() - ssp)
+			throw std::runtime_error("Paxos dense size overflow.");
+		mDenseSize = mG + (dt == DenseType::Binary ? ssp : 0);
+		validate();
 	}
 
 #ifdef ENABLE_SSE
@@ -776,8 +788,9 @@ namespace volePSI
 	template<typename IdxType>
 	void Paxos<IdxType>::init(u64 numItems, PaxosParam p, block seed)
 	{
-		if (p.mWeight < 2 || p.mWeight > 20)
-			throw std::runtime_error("weight must be in [2, 20].");
+		p.validate();
+		if (numItems > u64(std::numeric_limits<IdxType>::max()))
+			throw RTE_LOC;
 		if (p.mSparseSize >= u64(std::numeric_limits<IdxType>::max()))
 		{
 			std::cout << "the size of the paxos is too large for the index type. "
@@ -942,7 +955,8 @@ namespace volePSI
 	{
 		setTimePoint("decode begin");
 
-		if (mWeight < 2 || mWeight > 20 || mHasher.mWeight != mWeight)
+		validate();
+		if (!mHasher.isConfiguredFor(mWeight, mSparseSize) || values.size() < inputs.size())
 			throw RTE_LOC;
 
 		if (PP.size() != size())
@@ -3097,14 +3111,13 @@ namespace volePSI
 		Paxos<IdxType>& paxos)
 	{
 		constexpr u64 batchSize = 32;
-		constexpr u64 maxWeightSize = 20;
-
 		auto main = (hashes.size() / batchSize) * batchSize;
 
-		if (mWeight < 2 || mWeight > maxWeightSize ||
-			paxos.mWeight != mWeight || paxos.mHasher.mWeight != mWeight)
+		paxos.validate();
+		if (mWeight < 2 || mWeight > maxWeight || paxos.mWeight != mWeight ||
+			!paxos.mHasher.isConfiguredFor(mWeight, paxos.mSparseSize))
 			throw RTE_LOC;
-		std::array<IdxType, maxWeightSize* batchSize> _backing;
+		std::array<IdxType, maxWeight * batchSize> _backing;
 		MatrixView<IdxType> row(_backing.data(), batchSize, mWeight);
 		assert(valuesBuff.size() >= batchSize);
 		//std::array<block, decodeSize> vals;
@@ -3259,10 +3272,12 @@ namespace volePSI
 		Helper& h,
 		u64 numThreads)
 	{
-		constexpr u64 maxWeightSize = 20;
-		if (mWeight < 2 || mWeight > maxWeightSize ||
-			mPaxosParam.mWeight != mWeight)
+		mPaxosParam.validate();
+		if (mWeight < 2 || mWeight > maxWeight || mPaxosParam.mWeight != mWeight ||
+			!mNumBins || pp.size() != size() || values.size() < inputs.size())
 			throw RTE_LOC;
+		if (inputs.empty())
+			return;
 
 		if (mNumBins == 1)
 		{
@@ -3274,7 +3289,12 @@ namespace volePSI
 		}
 
 
-		numThreads = std::max<u64>(numThreads, 1ull);
+		// Avoid worker-exception bookkeeping allocations in the single-threaded path.
+		if (numThreads <= 1)
+		{
+			implDecodeBatch<IdxType>(inputs, values, pp, h);
+			return;
+		}
 
 		std::vector<std::thread> thrds(numThreads - 1);
 		std::vector<std::exception_ptr> exs(numThreads);
@@ -3284,7 +3304,7 @@ namespace volePSI
 			{
 				auto begin = (inputs.size() * i) / numThreads;
 				auto end = (inputs.size() * (i + 1)) / numThreads;
-				span<const block> in(inputs.begin() + begin, inputs.begin() + end);
+				auto in = inputs.subspan(begin, end - begin);
 				auto va = values.subspan(begin, end - begin);
 				implDecodeBatch<IdxType>(in, va, pp, h);
 			}

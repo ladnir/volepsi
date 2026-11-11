@@ -1644,12 +1644,12 @@ void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd)
 			throw RTE_LOC;
 	};
 
-	// 1. Parameter validation at init time: numItems > 0 and weight in [2, 20].
+	// 1. Lower weight bounds apply to Paxos; the fixed upper bound is Baxos-only.
 	expectThrows([]() {
 		PaxosParam p;
 		p.init(0, 3, 40, PaxosParam::GF128);
 	});
-	for (u64 badWeight : { u64(0), u64(1), u64(21), u64(64) })
+	for (u64 badWeight : { u64(0), u64(1) })
 	{
 		expectThrows([&]() {
 			PaxosParam p;
@@ -1672,24 +1672,83 @@ void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd)
 			hasher.init(block(1, 2), badWeight, 128);
 		});
 	}
+	for (u64 badWeight : {u64(21), u64(64)})
+		expectThrows([&]() {
+			Baxos b;
+			b.init(64, 32, badWeight, 40, PaxosParam::GF128, block(1, 2));
+		});
 	expectThrows([]() {
 		PaxosHash<u16> hasher;
-		hasher.init(block(1, 2), 3, 3);
+		hasher.init(block(1, 2), 3, 2);
 	});
 
-	// 2. Inclusive boundary round-trips for weight == 2 and weight == 20 (maxWeightSize).
+	// Selecting every sparse column is valid: the final modulus is one, not zero.
+	{
+		PaxosHash<u16> hasher;
+		hasher.init(block(1, 2), 3, 3);
+		std::array<block, 32> hashes;
+		std::array<u16, 96> rows;
+		PRNG prng(block(17, 19));
+		prng.get(hashes.data(), hashes.size());
+		hasher.buildRow32(hashes.data(), rows.data());
+		for (u64 i = 0; i < hashes.size(); ++i)
+		{
+			std::array<u16, 3> scalar;
+			hasher.buildRow(hashes[i], scalar.data());
+			u64 mask = 0;
+			for (u64 j = 0; j < 3; ++j)
+			{
+				if (scalar[j] >= 3 || rows[3 * i + j] != scalar[j])
+					throw RTE_LOC;
+				mask |= u64(1) << scalar[j];
+			}
+			if (mask != 7)
+				throw RTE_LOC;
+		}
+	}
+
+	// Standalone Paxos has dynamically sized row storage, unlike Baxos.
+	for (u64 weight : {u64(21), u64(32)})
+	{
+		Paxos<u16> p;
+		PaxosParam param(129, weight, 40, PaxosParam::GF128);
+		p.init(129, param, block(3, 7));
+		std::vector<block> items(129), values(129), decoded(129), table(p.size());
+		PRNG prng(block(11, 13));
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		p.setInput(items);
+		p.encode<block>(values, table);
+		p.decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+	}
+
+	expectThrows([] { PaxosParam p(128, 3, std::numeric_limits<u64>::max(), PaxosParam::GF128); });
+	expectThrows([] { PaxosParam p(std::numeric_limits<u64>::max(), 2, 40, PaxosParam::GF128); });
+	expectThrows([] { PaxosParam p(128, 3, 80, PaxosParam::Binary); });
+	for (auto type : {PaxosParam::GF128, PaxosParam::Binary})
+		expectThrows([&] {
+			PaxosParam param(128, 3, 40, type);
+			param.mDenseSize = type == PaxosParam::GF128 ? 0 : 65;
+			Paxos<u16> p;
+			p.init(128, param, ZeroBlock);
+		});
+
+	// 2. Inclusive Baxos boundary round-trips for weight == 2 and weight == 20.
 	{
 		PRNG prng(block(9, 10));
 		std::vector<block> items(128), values(128), decoded(128);
 		prng.get<block>(items);
 		prng.get<block>(values);
 
+		for (auto type : {PaxosParam::GF128, PaxosParam::Binary})
 		for (u64 validWeight : { u64(2), u64(20) })
 		{
 			for (u64 nt : { u64(1), u64(2) })
 			{
 				Baxos baxos;
-				baxos.init(items.size(), 64, validWeight, 40, PaxosParam::GF128, block(5, 6));
+				baxos.init(items.size(), 64, validWeight, 40, type, block(5, 6));
 				std::vector<block> pp(baxos.size(), oc::ZeroBlock);
 				baxos.solve<block>(items, values, pp, nullptr, nt);
 				std::fill(decoded.begin(), decoded.end(), oc::ZeroBlock);
@@ -1830,9 +1889,30 @@ void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd)
 		});
 	}
 
+	// Matching weight fields alone do not make a previously initialized hash
+	// cache consistent. The weight-three SIMD path reads three cached moduli.
+	expectThrows([] {
+		Paxos<u16> p;
+		p.init(128, PaxosParam(128, 2, 40, PaxosParam::GF128), ZeroBlock);
+		p.mWeight = p.mHasher.mWeight = 3;
+		std::vector<block> inputs(32, block(1, 2)), values(32), table(p.size());
+		p.decode<block>(inputs, values, table);
+	});
+
+	// Reject undersized public buffers before creating workers or writing.
+	for (u64 nt : {u64(0), u64(1), u64(4)})
+	{
+		auto b = makeValidBaxos();
+		std::vector<block> table(b.size(), ZeroBlock), shortValues(items.size() - 1);
+		expectThrows([&] { b.decode<block>(items, shortValues, table, nt); });
+		table.pop_back();
+		expectThrows([&] { b.decode<block>(items, values, table, nt); });
+	}
+
 	// 5. Worker-thread exceptions in Baxos::implParDecode percolate up to the main thread
 	// instead of terminating the process.
-	expectThrows([]() {
+	for (u64 threads : {u64(0), u64(1), u64(4)})
+	expectThrows([threads]() {
 		Baxos b;
 		b.init(128, 32, 3, 40, PaxosParam::GF128, block(11, 12));
 		std::vector<block> parItems(128);
@@ -1842,7 +1922,7 @@ void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd)
 		std::vector<u8> u8Pp(b.size(), 0);
 		// GF128 dense decoding with ValueType=u8 throws std::runtime_error inside
 		// PxVector<u8>::Helper::multAdd on the worker threads.
-		b.decode<u8>(parItems, u8Values, u8Pp, 4);
+		b.decode<u8>(parItems, u8Values, u8Pp, threads);
 	});
 }
 
