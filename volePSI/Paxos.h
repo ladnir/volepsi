@@ -14,6 +14,7 @@
 #include <numeric>
 #include <iomanip>
 #include <cmath>
+#include <stdexcept>
 
 #include "volePSI/Defines.h"
 
@@ -435,10 +436,12 @@ namespace volePSI
 		// initialize the paxos with the given parameter.
 		void init(u64 numItems, u64 binSize, u64 weight, u64 ssp, PaxosParam::DenseType dt, block seed)
 		{
+			if (!numItems || !binSize)
+				throw std::invalid_argument("Baxos requires positive item/bin sizes.");
 			mNumItems = numItems;
 			mWeight = weight;
-			mNumBins = (numItems + binSize - 1) / binSize;
-			mItemsPerBin = getBinSize(mNumBins, mNumItems, ssp + std::log2(mNumBins));
+			mNumBins = numItems / binSize + (numItems % binSize != 0);
+			mItemsPerBin = getBinSize(mNumBins, mNumItems, ssp);
 			mSsp = ssp;
 			mSeed = seed;
 			mPaxosParam.init(mItemsPerBin, weight, ssp, dt);
@@ -566,7 +569,7 @@ namespace volePSI
 			return u64(mNumBins * (mPaxosParam.mSparseSize + mPaxosParam.mDenseSize));
 		}
 
-		static u64 getBinSize(u64 numBins, u64 numItems, u64 ssp);
+		static u64 getBinSize(u64 numBins, u64 numItems, u64 ssp, u64 numBinSets = 1);
 
 		u64 binIdxCompress(const block& h)
 		{

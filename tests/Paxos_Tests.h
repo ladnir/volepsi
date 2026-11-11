@@ -24,6 +24,8 @@ void Baxos_solve_mtx_Test(const oc::CLP& cmd);
 void Baxos_solve_par_Test(const oc::CLP& cmd);
 void Baxos_solve_rand_Test(const oc::CLP& cmd);
 void Baxos_solve_rand_gap_Test(const oc::CLP& cmd);
+void Baxos_bin_overflow_Test(const oc::CLP& cmd);
+void Baxos_bin_size_Test(const oc::CLP& cmd);
 
 
 
