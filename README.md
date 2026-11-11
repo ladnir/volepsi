@@ -16,6 +16,8 @@ python3 build.py -DVOLE_PSI_ENABLE_BOOST=ON
 If TCP/IP support is not required, then a minimal version of the library can be build by calling `python3 build.py`. See below and the cmake/python output for additional options.
 The user can manually call cmake as well.
 
+When upgrading from an older checkout, run `python3 build.py --clean` before rebuilding to refresh the staged dependencies. The bundled libOTe revision is pinned in `thirdparty/getLibOTe.cmake`; externally supplied libOTe builds must provide the same API. Update both PSI peers together: the current libOTe default is `BlkAcc3x32`, and older protocol builds are not wire-compatible. Silver and QuasiCyclic are not supported for the GF128 VOLE used by PSI.
+
 The output library `volePSI` and executable `frontend` will be written to `out/build/<platform>/`. The `frontend` can perform PSI based on files as input sets and communicate via sockets. See the output of `frontend` for details. There is also two example on how to perform [networking](https://github.com/Visa-Research/volepsi/blob/main/frontend/networkSocketExample.h#L7) or [manually](https://github.com/Visa-Research/volepsi/blob/main/frontend/messagePassingExample.h#L93) get & send the protocol messages.
 
 ##### Compile Options

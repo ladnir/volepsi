@@ -2,7 +2,7 @@
 set(USER_NAME           )      
 set(TOKEN               )      
 set(GIT_REPOSITORY      "https://github.com/osu-crypto/libOTe.git")
-set(GIT_TAG             "d55867114c78272be7142bd67ebdcb346fec8621" )
+set(GIT_TAG             "e745f3f4fd7861a4b3f6e425d5b7fbeb27ecf449" )
 
 set(DEP_NAME            libOTe)          
 set(CLONE_DIR "${VOLE_PSI_THIRDPARTY_CLONE_DIR}/${DEP_NAME}")
@@ -20,6 +20,7 @@ if(NOT ${DEP_NAME}_FOUND OR LIBOTE_DEV)
 
     find_program(GIT git REQUIRED)
     set(DOWNLOAD_CMD  ${GIT} clone --recursive ${GIT_REPOSITORY})
+    set(FETCH_CMD     ${GIT} fetch origin ${GIT_TAG})
     set(CHECKOUT_CMD  ${GIT} checkout ${GIT_TAG})
     set(SUBMODULE_CMD   ${GIT} submodule update --recursive)
     set(CONFIGURE_CMD ${CMAKE_COMMAND} -S ${CLONE_DIR} -B ${BUILD_DIR} -DCMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}
@@ -35,6 +36,8 @@ if(NOT ${DEP_NAME}_FOUND OR LIBOTE_DEV)
                        -DENABLE_BITPOLYMUL=${VOLE_PSI_ENABLE_BITPOLYMUL}
                        -DENABLE_SILENTOT=ON
                        -DENABLE_SILENT_VOLE=ON
+                       -DENABLE_LOGVOLE=OFF
+                       -DENABLE_SPIN=OFF
                        -DENABLE_SSE=${VOLE_PSI_ENABLE_SSE}
                        -DENABLE_BOOST=${VOLE_PSI_ENABLE_BOOST}
                        -DENABLE_OPENSSL=${VOLE_PSI_ENABLE_OPENSSL}
@@ -57,25 +60,15 @@ if(NOT ${DEP_NAME}_FOUND OR LIBOTE_DEV)
     endif()
 
 
+    execute_process(COMMAND ${GIT} cat-file -e "${GIT_TAG}^{commit}"
+        WORKING_DIRECTORY ${CLONE_DIR} RESULT_VARIABLE LIBOTE_REVISION_MISSING
+        OUTPUT_QUIET ERROR_QUIET)
+    if(LIBOTE_REVISION_MISSING)
+        run(NAME "libOTe Fetch ${GIT_TAG}" CMD ${FETCH_CMD} WD ${CLONE_DIR})
+    endif()
     run(NAME "libOTe Checkout ${GIT_TAG} " CMD ${CHECKOUT_CMD}  WD ${CLONE_DIR})
     run(NAME "libOTe submodule"       CMD ${SUBMODULE_CMD} WD ${CLONE_DIR})
     run(NAME "libOTe Configure"       CMD ${CONFIGURE_CMD} WD ${CLONE_DIR})
-
-    # Backport libdivide's operator== compile fix (upstream fa020f3b3e7ab3e80a2b23ab70bad0f46dbab795).
-    # Keep the pinned arithmetic implementation; update the fetched source as well
-    # as the staged header so a later install does not restore the broken version.
-    set(LIBDIVIDE_HEADER "${VOLE_PSI_THIRDPARTY_CLONE_DIR}/libdivide/libdivide.h")
-    if(EXISTS "${LIBDIVIDE_HEADER}")
-        file(READ "${LIBDIVIDE_HEADER}" LIBDIVIDE_SOURCE)
-        string(REPLACE
-            "div.denom.magic == other.denom.magic && div.denom.more == other.denom.more"
-            "div.denom.magic == other.div.denom.magic && div.denom.more == other.div.denom.more"
-            LIBDIVIDE_FIXED "${LIBDIVIDE_SOURCE}")
-        if(NOT LIBDIVIDE_FIXED STREQUAL LIBDIVIDE_SOURCE)
-            file(WRITE "${LIBDIVIDE_HEADER}" "${LIBDIVIDE_FIXED}")
-        endif()
-        configure_file("${LIBDIVIDE_HEADER}" "${VOLEPSI_THIRDPARTY_DIR}/include/libdivide.h" COPYONLY)
-    endif()
 
     # Match AES::ecbEncBlocks: ARM's penultimate round omits MixColumns.
     # AES-NI and portable AES use the same operation for roundFn and penultimateFn.
