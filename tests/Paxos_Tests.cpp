@@ -1456,53 +1456,81 @@ void Paxos_invE_g3_Test(const oc::CLP& cmd)
 
 void Baxos_bin_overflow_Test(const oc::CLP&)
 {
-    auto expectThrows = [](auto&& fn)
+    auto expectThrows = [](auto&& fn, const char* message)
     {
-        bool threw = false;
         try
         {
             fn();
         }
-        catch (const std::runtime_error&)
+        catch (const std::runtime_error& e)
         {
-            threw = true;
+            if (std::string(e.what()).find(message) != 0)
+                throw;
+            return;
         }
-        if (!threw)
-            throw RTE_LOC;
+        throw RTE_LOC;
     };
 
-    // 3. SimpleIndex::insertItems throws on bin capacity overflow.
-    expectThrows([]() {
-        SimpleIndex index;
-        index.init(8, 100, 40, 3);
-        std::vector<block> duplicateItems(100, ZeroBlock);
-        index.insertItems(duplicateItems, ZeroBlock);
-    });
+    // Fill each selected bin exactly, then reject one more item without
+    // incrementing the count or modifying the stored entries.
+    SimpleIndex index;
+    index.init(8, 100, 40, 3);
+    std::vector<block> duplicateItems(index.mMaxBinSize, ZeroBlock);
+    index.insertItems(duplicateItems, ZeroBlock);
+    auto sizes = index.mBinSizes;
+    std::vector<u64> entries(index.mBins.size());
+    for (u64 i = 0; i < entries.size(); ++i)
+        entries[i] = index.mBins.data()[i].mVal;
+    block extra = ZeroBlock;
+    expectThrows([&]() { index.insertItems(span<block>(&extra, 1), ZeroBlock); },
+        "SimpleIndex bin overflow");
+    if (sizes != index.mBinSizes)
+        throw RTE_LOC;
+    for (u64 i = 0; i < entries.size(); ++i)
+        if (entries[i] != index.mBins.data()[i].mVal)
+            throw RTE_LOC;
 
-    // 4. Baxos::solve throws on single-threaded and multi-threaded (batch loop,
-    // scalar tail loop, and post-barrier merge) bin overflow without calling
-    // std::terminate() or deadlocking on hashingDoneFu.
-    struct OverflowCase { u64 numItems, binSize, nt; };
-    for (auto c : { OverflowCase{200, 50, 1}, {320, 80, 4}, {200, 50, 4}, {80, 40, 4} })
+    // Exercise the batch loop, scalar tail, and post-barrier merge. Distinct
+    // keys avoid conflating a bin overflow with Paxos duplicate-input errors.
+    enum Stage { Batch, Tail, Merge };
+    struct OverflowCase { u64 numItems, binSize, nt; Stage stage; };
+    for (auto c : { OverflowCase{200, 50, 1, Batch}, {512, 128, 4, Batch},
+        {200, 50, 4, Tail}, {128, 64, 4, Merge} })
     {
-        expectThrows([c]() {
-            Baxos baxos;
-            baxos.init(c.numItems, c.binSize, 3, 40, PaxosParam::GF128, ZeroBlock);
+        Baxos baxos;
+        baxos.init(c.numItems, c.binSize, 3, 40, PaxosParam::GF128, ZeroBlock);
+        auto perThread = c.numItems / c.nt;
+        auto capacity = Baxos::getBinSize(baxos.mNumBins, perThread, baxos.mSsp);
+        auto main = perThread / 32 * 32;
+        if ((c.stage == Batch && capacity >= main) ||
+            (c.stage == Tail && (capacity < main || capacity >= perThread)) ||
+            (c.stage == Merge && (capacity < perThread || baxos.mItemsPerBin >= c.numItems)))
+            throw RTE_LOC;
+
+        // Fail all workers, just a background worker, or just the caller's
+        // worker. In the latter two cases the other workers reach the barrier.
+        for (u64 failingThread : {c.nt, u64(0), c.nt - 1})
+        {
+            if (c.stage == Merge && failingThread != c.nt)
+                continue;
             oc::AES hasher(baxos.mSeed);
-            std::vector<block> collidingKeys;
-            collidingKeys.reserve(c.numItems);
-            for (u64 candidate = 1; collidingKeys.size() < c.numItems; ++candidate)
+            std::vector<block> keys;
+            keys.reserve(c.numItems);
+            u64 candidate = 0;
+            for (u64 i = 0; i < c.numItems; ++i)
             {
-                block b(0, candidate);
-                if (baxos.modNumBins(hasher.hashBlock(b)) == 0)
-                    collidingKeys.push_back(b);
+                auto thread = i / perThread;
+                auto target = (failingThread == c.nt || failingThread == thread)
+                    ? 0 : (i % baxos.mNumBins);
+                block key;
+                do { key = block(0, ++candidate); }
+                while (baxos.modNumBins(hasher.hashBlock(key)) != target);
+                keys.push_back(key);
             }
             std::vector<block> values(c.numItems, oc::OneBlock);
             std::vector<block> out(baxos.size(), ZeroBlock);
-            baxos.solve<block>(collidingKeys, values, out, nullptr, c.nt);
-        });
+            expectThrows([&]() { baxos.solve<block>(keys, values, out, nullptr, c.nt); },
+                c.stage == Merge ? "Baxos merged bin overflow" : "Baxos per-thread bin overflow");
+        }
     }
 }
-
-
-

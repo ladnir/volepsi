@@ -2738,11 +2738,8 @@ namespace volePSI
 		std::promise<void> hashingDoneProm;
 		auto hashingDoneFu = hashingDoneProm.get_future().share();
 
-		auto routine = [&](u64 thrdIdx)
+		auto processBins = [&](u64 thrdIdx, bool& countedDone)
 		{
-			bool countedDone = false;
-			try
-			{
 			auto begin = (inputs_.size() * thrdIdx) / numThreads;
 			auto end = (inputs_.size() * (thrdIdx + 1)) / numThreads;
 			auto inputs = inputs_.subspan(begin, end - begin);
@@ -2783,7 +2780,7 @@ namespace volePSI
 					{
 						auto binIdx = binIdxs[k];
 						if (binSizes[binIdx] >= perThrdMaxBinSize)
-							throw RTE_LOC;
+							throw std::runtime_error("Baxos per-thread bin overflow" LOCATION);
 						auto bs = binSizes[binIdx]++;
 						getInputMapping(thrdIdx, binIdx)[bs] = inIdx;
 						h.assign(getValues(thrdIdx, binIdx)[bs], vals_[inIdx]);
@@ -2797,7 +2794,7 @@ namespace volePSI
 
 					auto binIdx = modNumBins(hashes[k]);
 					if (binSizes[binIdx] >= perThrdMaxBinSize)
-						throw RTE_LOC;
+						throw std::runtime_error("Baxos per-thread bin overflow" LOCATION);
 					auto bs = binSizes[binIdx]++;
 
 					if (inIdx == 9355778)
@@ -2844,7 +2841,7 @@ namespace volePSI
 					binSize += thrdBinSizes(i, binIdx);
 
 				if (binSize > mItemsPerBin)
-					throw RTE_LOC;
+					throw std::runtime_error("Baxos merged bin overflow" LOCATION);
 
 				paxos.init(binSize, mPaxosParam, mSeed);
 
@@ -2947,6 +2944,15 @@ namespace volePSI
 				paxos.encode(values, output, h, prng);
 
 			}
+		};
+
+		// Record each worker failure and count it at the hashing barrier exactly once.
+		auto routine = [&](u64 thrdIdx)
+		{
+			bool countedDone = false;
+			try
+			{
+				processBins(thrdIdx, countedDone);
 			}
 			catch (...)
 			{

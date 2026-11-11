@@ -362,7 +362,7 @@ namespace volePSI
                 {
                     auto loc = locations(k,j);
                     if (mBinSizes[loc] >= mMaxBinSize)
-                        throw RTE_LOC;
+                        throw std::runtime_error("SimpleIndex bin overflow" LOCATION);
                     mBins(loc, mBinSizes[loc]++).set(i+k, j);
                 }
             }
