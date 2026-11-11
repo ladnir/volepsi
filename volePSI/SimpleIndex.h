@@ -74,7 +74,12 @@ namespace volePSI
 
         block mHashSeed;
         void print() ;
-        static  u64 get_bin_size(u64 numBins, u64 numBalls, u64 statSecParam, bool approx = true);
+        // Capacity for independent uniform binning, unioned over numBinSets
+        // sets of numBalls items. Reserve one extra bit for composing bounds.
+        // The security parameter has no table-imposed limit. The legacy approx
+        // flag is retained for source compatibility; both values use this bound.
+        static u64 get_bin_size(u64 numBins, u64 numBalls, u64 statSecParam,
+            bool approx = true, u64 numBinSets = 1);
         
 
         void init(u64 numBins, u64 numBalls, u64 statSecParam = 40, u64 numHashFunction = 3);

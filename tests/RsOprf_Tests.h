@@ -10,5 +10,6 @@
 
 
 void RsOprf_eval_test(const oc::CLP&);
+void RsOprf_multiKeyAES_test(const oc::CLP&);
 void RsOprf_mal_test(const oc::CLP&);
 void RsOprf_reduced_test(const oc::CLP&);

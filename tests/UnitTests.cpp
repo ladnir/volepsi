@@ -33,10 +33,13 @@ namespace volePSI_Tests
         t.add("Baxos_solve_mtx_Test        ", Baxos_solve_mtx_Test);
         t.add("Baxos_solve_par_Test        ", Baxos_solve_par_Test);
         t.add("Baxos_solve_rand_Test       ", Baxos_solve_rand_Test);
+        t.add("Baxos_bin_overflow_Test", Baxos_bin_overflow_Test);
+        t.add("Baxos_bin_size_Test", Baxos_bin_size_Test);
         t.add("Baxos_decode_weight_overflow_Test", Baxos_decode_weight_overflow_Test);
         
 #ifdef VOLE_PSI_ENABLE_GMW
         t.add("SilentTripleGen_test        ", SilentTripleGen_test);
+        t.add("SilentTripleGen_portable_test", SilentTripleGen_portable_test);
         //t.add("IknpTripleGen_test          ", IknpTripleGen_test);
         t.add("generateBase_test           ", generateBase_test);
 
@@ -55,6 +58,7 @@ namespace volePSI_Tests
 #endif
 
         t.add("RsOprf_eval_test            ", RsOprf_eval_test);
+        t.add("RsOprf_multiKeyAES_test     ", RsOprf_multiKeyAES_test);
         t.add("RsOprf_mal_test             ", RsOprf_mal_test);
         t.add("RsOprf_reduced_test         ", RsOprf_reduced_test);
                    

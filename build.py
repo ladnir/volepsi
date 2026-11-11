@@ -3,6 +3,7 @@ import platform
 import sys
 import multiprocessing
 import shutil
+import subprocess
 
 def getParallel(args):
     par = multiprocessing.cpu_count()
@@ -27,7 +28,6 @@ def Build(projectName, argv, install, par, sudo, noConfig):
 
     osStr = (platform.system())
     buildDir = ""
-    config = ""
     buildType = ""
     setup = "--setup" in argv;
     argv = replace(argv, "--setup", "")
@@ -41,7 +41,6 @@ def Build(projectName, argv, install, par, sudo, noConfig):
 
     if osStr == "Windows":
         buildDir = "out/build/x64-{0}".format(buildType)
-        config = "--config {0}".format(buildType)
     elif osStr == "Darwin":
         buildDir = "out/build/osx"
     else:
@@ -49,53 +48,30 @@ def Build(projectName, argv, install, par, sudo, noConfig):
 
     argv.append("-DCMAKE_BUILD_TYPE={0}".format(buildType))
 
-    argStr = ""
-    for a in argv:
-        argStr = argStr + " " + a
-
-    parallel = ""
-    if par != 1:
-        parallel = " --parallel " + str(par)
-
-    mkDirCmd = "mkdir -p {0}".format(buildDir); 
-    CMakeCmd = "cmake -S . -B {0} {1}".format(buildDir, argStr)
-    BuildCmd = "cmake --build {0} {1} {2} ".format(buildDir, config, parallel)
-
-    
-    InstallCmd = ""
-    if sudo:
-        sudo = "sudo "
-    else:
-        sudo = ""
-
-
-    if install:
-        InstallCmd = sudo
-        InstallCmd += "cmake --install {0} {1} ".format(buildDir, config)
+    configArgs = ["--config", buildType] if osStr == "Windows" else []
+    CMakeCmd = ["cmake", "-S", ".", "-B", buildDir] + [a for a in argv if a]
+    BuildCmd = ["cmake", "--build", buildDir] + configArgs + ["--parallel", str(par)]
+    InstallCmd = (["sudo"] if sudo else []) + ["cmake", "--install", buildDir] + configArgs
 
     
     print("\n\n====== build.py ("+projectName+") ========")
     if not noConfig:
-        print(mkDirCmd)
-        print(CMakeCmd)
+        print(subprocess.list2cmdline(CMakeCmd))
 
     if not setup:
-        print(BuildCmd)
-        if len(InstallCmd):
-            print(InstallCmd)
-    print("vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\n\n")
+        print(subprocess.list2cmdline(BuildCmd))
+        if install:
+            print(subprocess.list2cmdline(InstallCmd))
+    print("vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv\n\n", flush=True)
 
     if not noConfig:
-        os.system(mkDirCmd)
-        os.system(CMakeCmd)
+        os.makedirs(buildDir, exist_ok=True)
+        subprocess.check_call(CMakeCmd)
 
     if not setup:
-        os.system(BuildCmd)
-
-        if len(sudo) > 0:
-            print("installing "+projectName+": {0}\n".format(InstallCmd))
-
-        os.system(InstallCmd)
+        subprocess.check_call(BuildCmd)
+        if install:
+            subprocess.check_call(InstallCmd)
 
 
 
