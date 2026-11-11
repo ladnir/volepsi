@@ -12,6 +12,7 @@
 
 void generateBase_test();
 void SilentTripleGen_test();
+void SilentTripleGen_portable_test();
 //void IknpTripleGen_test();
 
 

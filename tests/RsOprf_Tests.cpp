@@ -6,10 +6,37 @@
 #include "cryptoTools/Network/IOService.h"
 #include <iomanip>
 #include "Common.h"
+#include "cryptoTools/Crypto/MultiKeyAES.h"
+#include <array>
 
 using coproto::LocalAsyncSocket;
 using namespace volePSI;
 using namespace oc;
+
+void RsOprf_multiKeyAES_test(const CLP&)
+{
+    PRNG prng(block(0, 17));
+    std::array<block, 8> keys, inputs, ciphertexts, hashes;
+    MultiKeyAES<8> batch;
+    for (u64 trial = 0; trial < 4; ++trial)
+    {
+        prng.get(keys.data(), keys.size());
+        prng.get(inputs.data(), inputs.size());
+        batch.setKeys(keys);
+        batch.ecbEncNBlocks(inputs.data(), ciphertexts.data());
+        batch.hashNBlocks(inputs.data(), hashes.data());
+        for (u64 i = 0; i < keys.size(); ++i)
+        {
+            AES single(keys[i]);
+            if (ciphertexts[i] != single.ecbEncBlock(inputs[i]) ||
+                hashes[i] != single.hashBlock(inputs[i]))
+                throw RTE_LOC;
+        }
+        batch.hashNBlocks(inputs.data(), inputs.data());
+        if (inputs != hashes)
+            throw RTE_LOC;
+    }
+}
 
 void RsOprf_eval_test(const CLP&)
 {
@@ -61,7 +88,8 @@ void RsOprf_mal_test(const CLP&)
 
     auto sockets = LocalAsyncSocket::makePair();
 
-    u64 n = 4000;
+    // Exercise both the eight-way batches and the single-key tail.
+    u64 n = 4003;
     PRNG prng0(block(0, 0));
     PRNG prng1(block(0, 1));
 

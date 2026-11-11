@@ -72,50 +72,67 @@ namespace volePSI
 		mHasBase = true;
 	}
 
+	// Portable versions of the three SSE intrinsics that expand() uses to pack one bit of
+	// each OT message into the triple vectors. They are always compiled and declared in the
+	// header, so the tests can check them on every platform; builds without ENABLE_SSE use
+	// them in place of the intrinsics.
+	namespace portable
+	{
+		// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_shuffle_epi8
+		// dst byte i is 0 if the top bit of b's byte i is set, else a's byte (b[i] & 15).
+		block shuffle_epi8(const block& a, const block& b)
+		{
+			block ret;
+			for (u64 i = 0; i < 16; ++i)
+			{
+				u8 bb = b.get<u8>()[i];
+				if (bb & 128)
+					ret.set<u8>(i, 0);
+				else
+				{
+					// Until 2026-11 this stored the index (bb & 15) instead of a's byte at that
+					// index. With the masks expand() uses, every result was zero, so on builds
+					// without SSE all triple shares taken from the OT messages were zero: the
+					// triple relation still held (0 = 0) and every output was correct, but the
+					// party in Sender mode sent its GMW wire shares unmasked.
+					u8 idx = bb & 15;
+					ret.set<u8>(i, a.get<u8>()[idx]);
+				}
+			}
+
+			return ret;
+		}
+
+		// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_slli_epi16
+		block slli_epi16(const block& a, int imm)
+		{
+			block ret;
+			for (u64 i = 0; i < 8; ++i)
+			{
+				ret.set<u16>(i, imm > 15 ? 0 : static_cast<u16>(a.get<u16>(i) << imm));
+			}
+
+			return ret;
+		}
+
+		// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_movemask_epi8
+		int movemask_epi8(const block& a)
+		{
+			int ret = 0;
+			for (u64 i = 0; i < 16; ++i)
+			{
+				ret |= int(a.get<u8>()[i] >> 7) << i;
+			}
+
+			return ret;
+		}
+	}
+
 #ifndef ENABLE_SSE
 
-	// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_shuffle_epi8&ig_expand=1038,900,6922,6328
-	inline block _mm_shuffle_epi8(const block& a, const block& b)
-	{
-		block ret;
-		for (u64 i = 0; i < 16; ++i)
-		{
-			u8 bb = b.get<u8>()[i];
-			if (bb & 128)
-				ret.set<u8>(i, 0);
-			else
-			{
-				u8 idx = bb & 15;
-				ret.set<u8>(i, idx);
-			}
-		}
-
-		return ret;
-	}
-
-	// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_slli_epi16&ig_expand=1038,900,6922,6328,6470
-	inline block _mm_slli_epi16(const block& a, int imm)
-	{
-		block ret;
-		for (u64 i = 0; i < 8; ++i)
-		{
-			ret.set<u16>(i, a.get<u16>(i) << imm);
-		}
-
-		return ret;
-	}
-
-	// https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#text=_mm_movemask_epi8&ig_expand=1038,900,6922,6328,6470,4836
-	inline int _mm_movemask_epi8(const block& a)
-	{
-		int ret = 0;
-		for (u64 i = 0; i < 16; ++i)
-		{
-			ret |= int(a.get<u8>()[i] >> 7) << i;
-		}
-
-		return ret;
-	}
+	inline block _mm_shuffle_epi8(const block& a, const block& b) { return portable::shuffle_epi8(a, b); }
+	inline block _mm_slli_epi16(const block& a, int imm) { return portable::slli_epi16(a, imm); }
+	inline int _mm_movemask_epi8(const block& a) { return portable::movemask_epi8(a); }
 
 #endif
 

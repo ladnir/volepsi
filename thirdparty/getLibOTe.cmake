@@ -60,6 +60,38 @@ if(NOT ${DEP_NAME}_FOUND OR LIBOTE_DEV)
     run(NAME "libOTe Checkout ${GIT_TAG} " CMD ${CHECKOUT_CMD}  WD ${CLONE_DIR})
     run(NAME "libOTe submodule"       CMD ${SUBMODULE_CMD} WD ${CLONE_DIR})
     run(NAME "libOTe Configure"       CMD ${CONFIGURE_CMD} WD ${CLONE_DIR})
+
+    # Backport libdivide's operator== compile fix (upstream fa020f3b3e7ab3e80a2b23ab70bad0f46dbab795).
+    # Keep the pinned arithmetic implementation; update the fetched source as well
+    # as the staged header so a later install does not restore the broken version.
+    set(LIBDIVIDE_HEADER "${VOLE_PSI_THIRDPARTY_CLONE_DIR}/libdivide/libdivide.h")
+    if(EXISTS "${LIBDIVIDE_HEADER}")
+        file(READ "${LIBDIVIDE_HEADER}" LIBDIVIDE_SOURCE)
+        string(REPLACE
+            "div.denom.magic == other.denom.magic && div.denom.more == other.denom.more"
+            "div.denom.magic == other.div.denom.magic && div.denom.more == other.div.denom.more"
+            LIBDIVIDE_FIXED "${LIBDIVIDE_SOURCE}")
+        if(NOT LIBDIVIDE_FIXED STREQUAL LIBDIVIDE_SOURCE)
+            file(WRITE "${LIBDIVIDE_HEADER}" "${LIBDIVIDE_FIXED}")
+        endif()
+        configure_file("${LIBDIVIDE_HEADER}" "${VOLEPSI_THIRDPARTY_DIR}/include/libdivide.h" COPYONLY)
+    endif()
+
+    # Match AES::ecbEncBlocks: ARM's penultimate round omits MixColumns.
+    # AES-NI and portable AES use the same operation for roundFn and penultimateFn.
+    set(MULTIKEY_AES_HEADER "${CLONE_DIR}/cryptoTools/cryptoTools/Crypto/MultiKeyAES.h")
+    if(EXISTS "${MULTIKEY_AES_HEADER}")
+        file(READ "${MULTIKEY_AES_HEADER}" MULTIKEY_AES_SOURCE)
+        string(REPLACE
+            "AES::roundFn(ciphertext[i], mAESs[i].mRoundKey[9])"
+            "AES::penultimateFn(ciphertext[i], mAESs[i].mRoundKey[9])"
+            MULTIKEY_AES_FIXED "${MULTIKEY_AES_SOURCE}")
+        if(NOT MULTIKEY_AES_FIXED STREQUAL MULTIKEY_AES_SOURCE)
+            file(WRITE "${MULTIKEY_AES_HEADER}" "${MULTIKEY_AES_FIXED}")
+        endif()
+        configure_file("${MULTIKEY_AES_HEADER}" "${VOLEPSI_THIRDPARTY_DIR}/include/cryptoTools/Crypto/MultiKeyAES.h" COPYONLY)
+    endif()
+
     run(NAME "libOTe Build"           CMD ${BUILD_CMD}     WD ${CLONE_DIR})
     run(NAME "libOTe Install"         CMD ${INSTALL_CMD}   WD ${CLONE_DIR})
 
