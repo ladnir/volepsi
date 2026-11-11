@@ -5,6 +5,10 @@
 #include <cmath>
 #include <unordered_set>
 #include <random>
+#include "cryptoTools/Crypto/AES.h"
+#include "volePSI/SimpleIndex.h"
+#include <stdexcept>
+#include <vector>
 using namespace volePSI;
 
 auto& ZeroBlock = oc::ZeroBlock;
@@ -1449,5 +1453,56 @@ void Paxos_invE_g3_Test(const oc::CLP& cmd)
 	//}
 
 }
+
+void Baxos_bin_overflow_Test(const oc::CLP&)
+{
+    auto expectThrows = [](auto&& fn)
+    {
+        bool threw = false;
+        try
+        {
+            fn();
+        }
+        catch (const std::runtime_error&)
+        {
+            threw = true;
+        }
+        if (!threw)
+            throw RTE_LOC;
+    };
+
+    // 3. SimpleIndex::insertItems throws on bin capacity overflow.
+    expectThrows([]() {
+        SimpleIndex index;
+        index.init(8, 100, 40, 3);
+        std::vector<block> duplicateItems(100, ZeroBlock);
+        index.insertItems(duplicateItems, ZeroBlock);
+    });
+
+    // 4. Baxos::solve throws on single-threaded and multi-threaded (batch loop,
+    // scalar tail loop, and post-barrier merge) bin overflow without calling
+    // std::terminate() or deadlocking on hashingDoneFu.
+    struct OverflowCase { u64 numItems, binSize, nt; };
+    for (auto c : { OverflowCase{200, 50, 1}, {320, 80, 4}, {200, 50, 4}, {80, 40, 4} })
+    {
+        expectThrows([c]() {
+            Baxos baxos;
+            baxos.init(c.numItems, c.binSize, 3, 40, PaxosParam::GF128, ZeroBlock);
+            oc::AES hasher(baxos.mSeed);
+            std::vector<block> collidingKeys;
+            collidingKeys.reserve(c.numItems);
+            for (u64 candidate = 1; collidingKeys.size() < c.numItems; ++candidate)
+            {
+                block b(0, candidate);
+                if (baxos.modNumBins(hasher.hashBlock(b)) == 0)
+                    collidingKeys.push_back(b);
+            }
+            std::vector<block> values(c.numItems, oc::OneBlock);
+            std::vector<block> out(baxos.size(), ZeroBlock);
+            baxos.solve<block>(collidingKeys, values, out, nullptr, c.nt);
+        });
+    }
+}
+
 
 

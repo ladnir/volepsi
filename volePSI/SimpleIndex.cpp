@@ -361,6 +361,8 @@ namespace volePSI
                 for(u64 k = 0; k < min; ++k)
                 {
                     auto loc = locations(k,j);
+                    if (mBinSizes[loc] >= mMaxBinSize)
+                        throw RTE_LOC;
                     mBins(loc, mBinSizes[loc]++).set(i+k, j);
                 }
             }
