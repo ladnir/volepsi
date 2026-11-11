@@ -436,8 +436,8 @@ namespace volePSI
 		// initialize the paxos with the given parameter.
 		void init(u64 numItems, u64 binSize, u64 weight, u64 ssp, PaxosParam::DenseType dt, block seed)
 		{
-			if (!numItems || !binSize || ssp > 80)
-				throw std::invalid_argument("Baxos requires positive item/bin sizes and ssp <= 80.");
+			if (!numItems || !binSize)
+				throw std::invalid_argument("Baxos requires positive item/bin sizes.");
 			mNumItems = numItems;
 			mWeight = weight;
 			mNumBins = numItems / binSize + (numItems % binSize != 0);

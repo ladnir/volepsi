@@ -1461,7 +1461,8 @@ void Baxos_bin_size_Test(const oc::CLP&)
     // across all bins and sets by 2^-(ssp+1), including the composition bit.
     struct Case { u64 bins, balls, ssp, sets, minimum; };
     for (auto q : { Case{5, 2048, 40, 1, 548}, {16, 131073, 60, 1, 9006},
-        {32, 1048576, 80, 1, 34676}, {32, 1048576, 40, 1, 34132},
+        {32, 1048576, 80, 1, 34676}, {32, 1048576, 128, 1, 35177},
+        {32, 1048576, 256, 1, 36182}, {32, 1048576, 40, 1, 34132},
         {32, 131072, 40, 8, 4601}, {64, 131072, 40, 8, 2415},
         {1048576, 1048576, 40, 1, 19}, {1048576, 1024, 80, 1, 8} })
     {
@@ -1476,7 +1477,7 @@ void Baxos_bin_size_Test(const oc::CLP&)
     // Directly sum small binomial tails; this does not reuse the sizing bound.
     for (u64 bins : {2, 3, 5, 16, 64})
         for (u64 balls : {1, 8, 24, 32, 50, 128, 200})
-            for (u64 ssp : {0, 40, 60, 80})
+            for (u64 ssp : {0, 40, 60, 80, 128, 256})
                 for (u64 sets : {1, 8})
                 {
                     auto cap = SimpleIndex::get_bin_size(bins, balls, ssp, true, sets);
@@ -1505,6 +1506,15 @@ void Baxos_bin_size_Test(const oc::CLP&)
             if (cap > balls || cap < balls / bins + (balls % bins != 0))
                 throw RTE_LOC;
         }
+    for (u64 ssp : {u64(81), u64(128), u64(256), max})
+    {
+        auto cap = SimpleIndex::get_bin_size(32, 1048576, ssp);
+        if (cap < 34676 || cap > 1048576)
+            throw RTE_LOC;
+    }
+    if (SimpleIndex::get_bin_size(32, 1048576, max) != 1048576 ||
+        SimpleIndex::get_bin_size(1, 0, max) != 0)
+        throw RTE_LOC;
 
     auto expectInvalid = [](auto&& fn)
     {
@@ -1514,8 +1524,6 @@ void Baxos_bin_size_Test(const oc::CLP&)
     };
     expectInvalid([] { SimpleIndex::get_bin_size(0, 100, 40); });
     expectInvalid([] { SimpleIndex::get_bin_size(2, 100, 40, true, 0); });
-    expectInvalid([] { SimpleIndex::get_bin_size(1, 0, 81); });
-    expectInvalid([] { Baxos b; b.init(100, 20, 3, 81, PaxosParam::GF128, ZeroBlock); });
     expectInvalid([] { Baxos b; b.init(100, 0, 3, 40, PaxosParam::GF128, ZeroBlock); });
 
     // Exercise the former non-power-of-two interpolation failure in a real
@@ -1524,7 +1532,7 @@ void Baxos_bin_size_Test(const oc::CLP&)
     std::vector<block> items(4095), values(4095), decoded(4095);
     prng.get(items.data(), items.size());
     prng.get(values.data(), values.size());
-    for (u64 ssp : {40, 80})
+    for (u64 ssp : {40, 80, 128, 256})
         for (u64 threads : {1, 4})
         {
             Baxos b;

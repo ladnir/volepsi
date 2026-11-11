@@ -76,8 +76,8 @@ namespace volePSI
         void print() ;
         // Capacity for independent uniform binning, unioned over numBinSets
         // sets of numBalls items. Reserve one extra bit for composing bounds.
-        // ssp is in [0,80]. The legacy approx flag is retained for source
-        // compatibility; both values use the same fast conservative bound.
+        // The security parameter has no table-imposed limit. The legacy approx
+        // flag is retained for source compatibility; both values use this bound.
         static u64 get_bin_size(u64 numBins, u64 numBalls, u64 statSecParam,
             bool approx = true, u64 numBinSets = 1);
         

@@ -47,8 +47,8 @@ namespace volePSI
     u64 SimpleIndex::get_bin_size(u64 numBins, u64 numBalls, u64 statSecParam,
         bool /*approx*/, u64 numBinSets)
     {
-        if (!numBins || !numBinSets || statSecParam > 80)
-            throw std::invalid_argument("Bin sizing requires positive bin/set counts and ssp <= 80.");
+        if (!numBins || !numBinSets)
+            throw std::invalid_argument("Bin sizing requires positive bin/set counts.");
         if (!numBalls || numBins == 1)
             return numBalls;
 
@@ -60,8 +60,9 @@ namespace volePSI
         // where rate(d) = n D((mean+d)/n || mean/n).
         // Union over all bins and sets; reserve one bit so Baxos can combine
         // the merged-bin and per-thread bounds within its requested budget.
-        const double target = (statSecParam + 1) * ln2 +
-            std::log(double(numBins)) + std::log(double(numBinSets)) + 1e-8;
+        double target = (double(statSecParam) + 1) * ln2 +
+            std::log(double(numBins)) + std::log(double(numBinSets));
+        target += std::max(1e-8, 64 * eps * target);
 
         // Round the distribution parameters upward, including u64 values
         // beyond double's exact integer range. The target has a small extra
