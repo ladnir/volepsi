@@ -166,6 +166,8 @@ namespace volePSI
 			throw std::runtime_error("numItems must be greater than 0.");
 		if (weight < 2)
 			throw std::runtime_error("weight must be 2 or greater.");
+		if (ssp < 20)
+			throw std::runtime_error("ssp must be 20 or greater.");
 
 		mWeight = weight;
 		mSsp = ssp;
@@ -193,7 +195,7 @@ namespace volePSI
 			// lambda = lambdaVsGap * g - 1.9 * lambdaVsGap
 			// g = (lambda + 1.9 * lambdaVsGap) /  lambdaVsGap
 			//   = lambda / lambdaVsGap + 1.9
-			if (!(lambdaVsGap > 0.0))
+			if (!std::isfinite(lambdaVsGap) || !(lambdaVsGap > 0.0))
 				throw std::runtime_error("Invalid Paxos parameter domain.");
 
 			mG = checkedSize(std::ceil(ssp / lambdaVsGap + 1.9));
@@ -224,7 +226,7 @@ namespace volePSI
 
 			double e = (ssp - b) / lambdaVsE;
 			double denom = (weight - 2) * std::log2(e * numItems);
-			if (!(denom > 0.0) || !(e > 0.0))
+			if (!std::isfinite(denom) || !(denom > 0.0) || !std::isfinite(e) || !(e > 0.0))
 				throw std::runtime_error("Invalid Paxos parameter domain.");
 			mG = checkedSize(std::floor(ssp / denom));
 			mSparseSize = checkedSize(numItems * e);
@@ -791,10 +793,10 @@ namespace volePSI
 		p.validate();
 		if (numItems > u64(std::numeric_limits<IdxType>::max()))
 			throw RTE_LOC;
-		if (p.mSparseSize >= u64(std::numeric_limits<IdxType>::max()))
+		if (p.size() >= u64(std::numeric_limits<IdxType>::max()))
 		{
 			std::cout << "the size of the paxos is too large for the index type. "
-				<< p.mSparseSize << " vs "
+				<< p.size() << " vs "
 				<< u64(std::numeric_limits<IdxType>::max()) << " " << LOCATION << std::endl;
 			throw RTE_LOC;
 		}
@@ -1222,7 +1224,9 @@ namespace volePSI
 	template<typename Vec, typename ConstVec, typename Helper>
 	void Paxos<IdxType>::encode(ConstVec& values, Vec& output, Helper& h, PRNG* prng)
 	{
-		if (static_cast<u64>(output.size()) != size())
+		validate();
+		if (static_cast<u64>(values.size()) != mNumItems ||
+			static_cast<u64>(output.size()) != size())
 			throw RTE_LOC;
 
 		std::vector<IdxType> mainRows, mainCols;
@@ -1479,6 +1483,8 @@ namespace volePSI
 		// the dense part of the paxos.
 		auto p2 = P.subspan(mSparseSize);
 
+		if (mDenseSize > 64)
+			throw RTE_LOC;
 		if (g > mG)
 			throw RTE_LOC;
 
@@ -1562,7 +1568,6 @@ namespace volePSI
 				h.add(y, P[cc]);
 			}
 
-			assert(mDenseSize <= 64);
 			// TODO, merge these two if statements
 			if (prng)
 			{
@@ -1579,7 +1584,6 @@ namespace volePSI
 			else
 			{
 				for (u64 j = 0; j < g; ++j) {
-					assert(mDenseSize <= 64);
 					if (mDense[i].template get<u64>(0) & denseMasks[j])
 					{
 						h.add(y, p2[gapCols[j]]);
@@ -1990,6 +1994,8 @@ namespace volePSI
 		}
 		else
 		{
+			if (mDenseSize > 64)
+				throw RTE_LOC;
 
 			std::array<u64, 8> d2;
 			std::array<u8, 8> b;
@@ -2004,7 +2010,6 @@ namespace volePSI
 				//memset(&zeroAndAllOne[0], 0, sizeof(ValueType));
 				//memset(&zeroAndAllOne[1], -1, sizeof(ValueType));
 
-				assert(mDenseSize <= 64);
 				for (u64 i = 0; i < 8; ++i)
 					d2[i] = dense[i].get<u64>(0);
 				//memcpy(d2.data(), dense, sizeof(u64) * 8);
@@ -2167,7 +2172,8 @@ namespace volePSI
 			//memset(&zeroAndAllOne[0], 0, sizeof(ValueType));
 			//memset(&zeroAndAllOne[1], -1, sizeof(ValueType));
 
-			assert(mDenseSize <= 64);
+			if (mDenseSize > 64)
+				throw RTE_LOC;
 			for (u64 i = 0; i < 8; ++i)
 				d2[i] = dense[i].get<u64>(0);
 			//memcpy(d2.data(), dense, sizeof(u64) * 8);
@@ -2256,6 +2262,8 @@ namespace volePSI
 		}
 		else
 		{
+			if (mDenseSize > 64)
+				throw RTE_LOC;
 
 			for (u64 i = 0; i < mDenseSize; ++i)
 			{
@@ -2651,14 +2659,19 @@ namespace volePSI
 		u64 numThreads,
 		Helper& h)
 	{
-		// select the smallest index type which will work.
-		auto bitLength = oc::roundUpTo(oc::log2ceil((u64)(mPaxosParam.mSparseSize + 1)), 8);
+		mPaxosParam.validate();
+		if (mWeight < 2 || mWeight > maxWeight || mPaxosParam.mWeight != mWeight ||
+			!mNumBins || inputs.size() > mNumItems || V.size() < inputs.size() ||
+			P.size() != size())
+			throw RTE_LOC;
 
-		if (bitLength <= 8)
+		// Select the smallest IdxType whose non-sentinel range fits all column indices [0, size()).
+		const auto paxosSize = mPaxosParam.size();
+		if (paxosSize < std::numeric_limits<u8>::max())
 			implParSolve<u8>(inputs, V, P, prng, numThreads, h);
-		else if (bitLength <= 16)
+		else if (paxosSize < std::numeric_limits<u16>::max())
 			implParSolve<u16>(inputs, V, P, prng, numThreads, h);
-		else if (bitLength <= 32)
+		else if (paxosSize < std::numeric_limits<u32>::max())
 			implParSolve<u32>(inputs, V, P, prng, numThreads, h);
 		else
 			implParSolve<u64>(inputs, V, P, prng, numThreads, h);
@@ -3087,12 +3100,13 @@ namespace volePSI
 		Helper& h,
 		u64 numThreads)
 	{
-		auto bitLength = oc::roundUpTo(oc::log2ceil((u64)(mPaxosParam.mSparseSize + 1)), 8);
-		if (bitLength <= 8)
+		mPaxosParam.validate();
+		const auto paxosSize = mPaxosParam.size();
+		if (paxosSize < std::numeric_limits<u8>::max())
 			implParDecode<u8>(inputs, V, P, h, numThreads);
-		else if (bitLength <= 16)
+		else if (paxosSize < std::numeric_limits<u16>::max())
 			implParDecode<u16>(inputs, V, P, h, numThreads);
-		else if (bitLength <= 32)
+		else if (paxosSize < std::numeric_limits<u32>::max())
 			implParDecode<u32>(inputs, V, P, h, numThreads);
 		else
 			implParDecode<u64>(inputs, V, P, h, numThreads);

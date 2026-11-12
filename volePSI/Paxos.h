@@ -61,8 +61,9 @@ namespace volePSI
 		void validate() const
 		{
 			if (mWeight < 2 || mSparseSize < mWeight || mG > mDenseSize ||
+				mDenseSize == 0 ||
 				mDenseSize > std::numeric_limits<u64>::max() - mSparseSize ||
-				(mDt == GF128 ? mDenseSize == 0 : mDt != Binary || mDenseSize > 64))
+				(mDt != GF128 && (mDt != Binary || mDenseSize > 64)))
 				throw std::runtime_error("Invalid Paxos dimensions or dense type.");
 		}
 
