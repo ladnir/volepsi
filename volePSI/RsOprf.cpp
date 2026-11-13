@@ -25,7 +25,7 @@ namespace volePSI
 
 		if (mMalicious)
 		{
-			mVoleSender.mMalType = oc::SilentSecType::Malicious;
+			mVoleSender.mSecurityType = oc::SilentSecType::Malicious;
 			ro.Update(ws);
 			ro.Final(hBuff);
 			co_await(chl.send(std::move(hBuff)));
@@ -247,7 +247,8 @@ namespace volePSI
 	Proto RsOprfSender::genVole(PRNG& prng, Socket& chl, bool reduceRounds)
 	{
 		if (reduceRounds)
-			mVoleSender.configure(mPaxos.size(), oc::SilentBaseType::Base);
+			mVoleSender.configure(mPaxos.size(), mVoleSender.mSecurityType,
+				mVoleSender.mLpnMultType, oc::SilentBaseType::Base);
 
 		return mVoleSender.silentSendInplace(mD, mPaxos.size(), prng, chl);
 	}
@@ -295,7 +296,7 @@ namespace volePSI
 
 		if (mMalicious)
 		{
-			mVoleRecver.mMalType = oc::SilentSecType::Malicious;
+			mVoleRecver.mSecurityType = oc::SilentSecType::Malicious;
 			co_await(chl.recv(Hws));
 		}
 
@@ -492,7 +493,8 @@ namespace volePSI
 	Proto RsOprfReceiver::genVole(u64 n, PRNG& prng, Socket& chl, bool reducedRounds)
 	{
 		if (reducedRounds)
-			mVoleRecver.configure(n, oc::SilentBaseType::Base);
+			mVoleRecver.configure(n, mVoleRecver.mSecurityType,
+				mVoleRecver.mLpnMultType, oc::SilentBaseType::Base);
 		return mVoleRecver.silentReceiveInplace(n, prng, chl);
 	}
 
