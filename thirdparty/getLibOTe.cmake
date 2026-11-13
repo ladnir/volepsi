@@ -2,7 +2,7 @@
 set(USER_NAME           )      
 set(TOKEN               )      
 set(GIT_REPOSITORY      "https://github.com/osu-crypto/libOTe.git")
-set(GIT_TAG             "1afe55bb7585752a40e95392fbc1d90a7d2de505" )
+set(GIT_TAG             "50f27b4debbff16e648385385aebf30bb4673809" )
 
 set(DEP_NAME            libOTe)          
 set(CLONE_DIR "${VOLE_PSI_THIRDPARTY_CLONE_DIR}/${DEP_NAME}")
@@ -70,21 +70,6 @@ if(NOT ${DEP_NAME}_FOUND OR LIBOTE_DEV)
     run(NAME "libOTe Checkout ${GIT_TAG} " CMD ${CHECKOUT_CMD}  WD ${CLONE_DIR})
     run(NAME "libOTe submodule"       CMD ${SUBMODULE_CMD} WD ${CLONE_DIR})
     run(NAME "libOTe Configure"       CMD ${CONFIGURE_CMD} WD ${CLONE_DIR})
-
-    # Match AES::ecbEncBlocks: ARM's penultimate round omits MixColumns.
-    # AES-NI and portable AES use the same operation for roundFn and penultimateFn.
-    set(MULTIKEY_AES_HEADER "${CLONE_DIR}/cryptoTools/cryptoTools/Crypto/MultiKeyAES.h")
-    if(EXISTS "${MULTIKEY_AES_HEADER}")
-        file(READ "${MULTIKEY_AES_HEADER}" MULTIKEY_AES_SOURCE)
-        string(REPLACE
-            "AES::roundFn(ciphertext[i], mAESs[i].mRoundKey[9])"
-            "AES::penultimateFn(ciphertext[i], mAESs[i].mRoundKey[9])"
-            MULTIKEY_AES_FIXED "${MULTIKEY_AES_SOURCE}")
-        if(NOT MULTIKEY_AES_FIXED STREQUAL MULTIKEY_AES_SOURCE)
-            file(WRITE "${MULTIKEY_AES_HEADER}" "${MULTIKEY_AES_FIXED}")
-        endif()
-        configure_file("${MULTIKEY_AES_HEADER}" "${VOLEPSI_THIRDPARTY_DIR}/include/cryptoTools/Crypto/MultiKeyAES.h" COPYONLY)
-    endif()
 
     run(NAME "libOTe Build"           CMD ${BUILD_CMD}     WD ${CLONE_DIR})
     run(NAME "libOTe Install"         CMD ${INSTALL_CMD}   WD ${CLONE_DIR})
