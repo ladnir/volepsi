@@ -14,10 +14,13 @@
 
 namespace volePSI
 {
+    inline constexpr oc::MultType DefaultVoleMultType = oc::MultType::ChosenBaa16x8;
 
     class RsOprfSender : public oc::TimerAdapter
     {
     public:
+        RsOprfSender() { setMultType(DefaultVoleMultType); }
+
         oc::SilentVoleSender<block,block, oc::CoeffCtxGF128> mVoleSender;
         span<block> mB;
         block mD;
@@ -48,6 +51,8 @@ namespace volePSI
     {
 
     public:
+        RsOprfReceiver() { setMultType(DefaultVoleMultType); }
+
         bool mMalicious = false;
         oc::SilentVoleReceiver<block, block, oc::CoeffCtxGF128> mVoleRecver;
         u64 mBinSize = 1 << 14;
