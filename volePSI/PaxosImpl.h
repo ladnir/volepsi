@@ -793,7 +793,8 @@ namespace volePSI
 		p.validate();
 		if (numItems > u64(std::numeric_limits<IdxType>::max()))
 			throw RTE_LOC;
-		if (p.size() >= u64(std::numeric_limits<IdxType>::max()))
+		// A count equal to max() uses indices [0, max()), leaving max() as the sentinel.
+		if (p.size() > u64(std::numeric_limits<IdxType>::max()))
 		{
 			std::cout << "the size of the paxos is too large for the index type. "
 				<< p.size() << " vs "
@@ -2667,11 +2668,11 @@ namespace volePSI
 
 		// Select the smallest IdxType whose non-sentinel range fits all column indices [0, size()).
 		const auto paxosSize = mPaxosParam.size();
-		if (paxosSize < std::numeric_limits<u8>::max())
+		if (paxosSize <= std::numeric_limits<u8>::max())
 			implParSolve<u8>(inputs, V, P, prng, numThreads, h);
-		else if (paxosSize < std::numeric_limits<u16>::max())
+		else if (paxosSize <= std::numeric_limits<u16>::max())
 			implParSolve<u16>(inputs, V, P, prng, numThreads, h);
-		else if (paxosSize < std::numeric_limits<u32>::max())
+		else if (paxosSize <= std::numeric_limits<u32>::max())
 			implParSolve<u32>(inputs, V, P, prng, numThreads, h);
 		else
 			implParSolve<u64>(inputs, V, P, prng, numThreads, h);
@@ -3102,11 +3103,11 @@ namespace volePSI
 	{
 		mPaxosParam.validate();
 		const auto paxosSize = mPaxosParam.size();
-		if (paxosSize < std::numeric_limits<u8>::max())
+		if (paxosSize <= std::numeric_limits<u8>::max())
 			implParDecode<u8>(inputs, V, P, h, numThreads);
-		else if (paxosSize < std::numeric_limits<u16>::max())
+		else if (paxosSize <= std::numeric_limits<u16>::max())
 			implParDecode<u16>(inputs, V, P, h, numThreads);
-		else if (paxosSize < std::numeric_limits<u32>::max())
+		else if (paxosSize <= std::numeric_limits<u32>::max())
 			implParDecode<u32>(inputs, V, P, h, numThreads);
 		else
 			implParDecode<u64>(inputs, V, P, h, numThreads);

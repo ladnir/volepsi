@@ -1944,7 +1944,7 @@ void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
 	};
 
 	// 1a. mSparseSize == 255 (numItems=110, binSize=110, weight=6, ssp=40) must select
-	// IdxType = u16 rather than colliding with u8 max sentinel 255.
+	// IdxType = u16 because the dense columns take the total above 255.
 	{
 		const u64 numItems = 110;
 		const u64 binSize = 110;
@@ -1964,7 +1964,7 @@ void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
 	}
 
 	// 1b. mPaxosParam.size() == 255 (numItems=134, binSize=134, weight=3, ssp=40,
-	// mSparseSize=250) also must select IdxType = u16 rather than u8.
+	// mSparseSize=250) still fits u8: the last column index is 254, not sentinel 255.
 	{
 		const u64 numItems = 134;
 		const u64 binSize = 134;
@@ -2007,53 +2007,72 @@ void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
 			throw RTE_LOC;
 	}
 
-	// 1d. Direct Paxos<IdxType>::init enforces total size() < numeric_limits<IdxType>::max().
+	// 1d. The maximum column count fits; one additional column uses the sentinel.
+	auto checkBoundary = [&]<typename IdxType>()
 	{
-		PaxosParam okU8;
-		okU8.mWeight = 3;
-		okU8.mSparseSize = 250;
-		okU8.mG = 4;
-		okU8.mDenseSize = 4;
-		okU8.mDt = PaxosParam::GF128;
-		Paxos<u8> pU8;
-		pU8.init(100, okU8, ZeroBlock);
+		PaxosParam param;
+		param.mWeight = 3;
+		param.mSparseSize = u64(std::numeric_limits<IdxType>::max()) - 5;
+		param.mG = param.mDenseSize = 5;
+		param.mDt = PaxosParam::GF128;
+		Paxos<IdxType> p;
+		p.init(100, param, ZeroBlock);
+		PRNG prng(block(13, 17));
+		std::vector<block> items(100), values(100), decoded(100), table(p.size());
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		p.setInput(items);
+		p.template encode<block>(values, table);
+		p.template decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+		auto triangulation = p.getTriangulization();
+		if (triangulation.mPerm.mColPerm.mDst2Src.size() != p.size())
+			throw RTE_LOC;
 
-		PaxosParam badU8 = okU8;
-		badU8.mG = 5;
-		badU8.mDenseSize = 5;
+		++param.mDenseSize;
 		expectThrows([&]() {
-			Paxos<u8> p;
-			p.init(100, badU8, ZeroBlock);
+			Paxos<IdxType> oversized;
+			oversized.init(100, param, ZeroBlock);
 		});
-
-		PaxosParam okU16 = okU8;
-		okU16.mSparseSize = 65530;
-		Paxos<u16> pU16;
-		pU16.init(100, okU16, ZeroBlock);
-
-		PaxosParam badU16 = okU16;
-		badU16.mG = 5;
-		badU16.mDenseSize = 5;
-		expectThrows([&]() {
-			Paxos<u16> p;
-			p.init(100, badU16, ZeroBlock);
-		});
-	}
+	};
+	checkBoundary.template operator()<u8>();
+	checkBoundary.template operator()<u16>();
 
 	// 2. PaxosParam::init enforces ssp >= 20 while still supporting weight == 2 and
-	// high GF128 ssp, and PaxosParam::validate rejects Binary mDenseSize == 0.
+	// high GF128 ssp. Only GF128 requires a nonempty dense part.
 	expectThrows([]() { PaxosParam p(64, 3, 0, PaxosParam::GF128); });
 	expectThrows([]() { PaxosParam p(64, 3, 0, PaxosParam::Binary); });
 	expectThrows([]() { PaxosParam p(64, 3, 19, PaxosParam::GF128); });
 	expectThrows([]() { PaxosParam p(64, 3, 19, PaxosParam::Binary); });
 	expectThrows([]() { PaxosParam p(64, 3, 64, PaxosParam::Binary); });
 	expectThrows([]() { PaxosParam p(64, 2, 64, PaxosParam::Binary); });
-	expectThrows([]() {
-		PaxosParam p(64, 3, 40, PaxosParam::Binary);
-		p.mG = 0;
-		p.mDenseSize = 0;
-		p.validate();
-	});
+	{
+		PaxosParam param;
+		param.mWeight = 3;
+		param.mSparseSize = 255;
+		param.mG = param.mDenseSize = 0;
+		param.mDt = PaxosParam::Binary;
+		Paxos<u8> p;
+		p.init(41, param, ZeroBlock);
+		PRNG prng(block(13, 17));
+		std::vector<block> items(41), values(41), decoded(41), table(p.size());
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		p.setInput(items);
+		for (bool randomized : {false, true})
+		{
+			p.encode<block>(values, table, randomized ? &prng : nullptr);
+			p.decode<block>(items, decoded, table);
+			if (decoded != values)
+				throw RTE_LOC;
+		}
+		auto triangulation = p.getTriangulization();
+		if (triangulation.mGap != 0 || triangulation.mPerm.mColPerm.mDst2Src.size() != 255)
+			throw RTE_LOC;
+		param.mDt = PaxosParam::GF128;
+		expectThrows([&]() { param.validate(); });
+	}
 	{
 		for (auto dt : { PaxosParam::GF128, PaxosParam::Binary })
 		{
