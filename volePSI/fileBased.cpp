@@ -254,8 +254,8 @@ namespace volePSI
 
             if (cmd.isSet("useSilver") || cmd.isSet("useQC"))
                 throw std::invalid_argument("Silver and QuasiCyclic are not supported for PSI GF128 VOLE.");
-            // Use libOTe's default VOLE encoder.
-            auto type = oc::DefaultMultType;
+            // Use volePSI's large-field VOLE encoder.
+            auto type = volePSI::DefaultVoleMultType;
 
             FileType ft = FileType::Unspecified;
             if (cmd.isSet("bin")) ft = FileType::Bin;
