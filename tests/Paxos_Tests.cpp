@@ -2151,4 +2151,164 @@ void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
 	}
 }
 
+void Paxos_bounds_and_gf128Inv_Test(const oc::CLP&)
+{
+	auto expectThrows = [](auto&& fn)
+	{
+		bool threw = false;
+		try
+		{
+			fn();
+		}
+		catch (const std::runtime_error&)
+		{
+			threw = true;
+		}
+		if (!threw)
+			throw RTE_LOC;
+	};
+
+	// 1. gf128Inv must pivot on any non-zero GF(2^128) element (not only
+	// OneBlock) and must still report a singular matrix as empty.
+	{
+		Matrix<block> mtx(2, 2);
+		mtx(0, 0) = ZeroBlock;
+		mtx(0, 1) = block(0, 3);
+		mtx(1, 0) = block(0, 2);
+		mtx(1, 1) = block(0, 5);
+
+		auto inv = gf128Inv(mtx);
+		if (inv.rows() != 2 || inv.cols() != 2)
+			throw RTE_LOC;
+		auto prod = gf128Mul(mtx, inv);
+		if (prod(0, 0) != oc::OneBlock || prod(0, 1) != ZeroBlock ||
+			prod(1, 0) != ZeroBlock || prod(1, 1) != oc::OneBlock)
+			throw RTE_LOC;
+
+		Matrix<block> singular(2, 2);
+		singular(0, 1) = block(0, 3);
+		singular(1, 1) = block(0, 5);
+		if (gf128Inv(singular).size() != 0)
+			throw RTE_LOC;
+	}
+
+	// 2. Paxos MatrixView<u8> encode/decode when the row width is a multiple
+	// of sizeof(block). 16 bytes per row reduces to the span overload and 32
+	// bytes per row to MatrixView<block> with two blocks per row; in both
+	// cases the output has Paxos::size() rows rather than numItems rows.
+	for (u64 cols : { u64(16), u64(32) })
+	{
+		const u64 n = 128;
+		Paxos<u16> paxos;
+		paxos.init(n, 3, 40, PaxosParam::GF128, block(1, 2));
+		PRNG prng(block(3, 4));
+		std::vector<block> items(n);
+		prng.get(items.data(), items.size());
+		Matrix<u8> values(n, cols), decoded(n, cols), p(paxos.size(), cols);
+		Matrix<u8> shortValues(n - 1, cols), shortP(paxos.size() - 1, cols);
+		prng.get(values.data(), values.size());
+
+		paxos.setInput(items);
+		expectThrows([&]() { paxos.encode<u8>(shortValues, p); });
+		expectThrows([&]() { paxos.encode<u8>(values, shortP); });
+		paxos.encode<u8>(values, p);
+
+		expectThrows([&]() { paxos.decode<u8>(items, shortValues, p); });
+		expectThrows([&]() { paxos.decode<u8>(items, decoded, shortP); });
+		paxos.decode<u8>(items, decoded, p);
+		if (decoded != values)
+			throw RTE_LOC;
+	}
+
+	// 3. The span and MatrixView<block> overloads of Paxos::encode,
+	// Paxos::decode, Baxos::solve, and Baxos::decode (and direct
+	// Baxos::implParSolve) reject inputs, values, and tables whose sizes do
+	// not match, and still round-trip otherwise.
+	{
+		const u64 n = 64;
+		PRNG prng(block(7, 8));
+		std::vector<block> items(n), values(n), decoded(n);
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		std::vector<block> shortItems(items.begin(), items.end() - 1);
+		std::vector<block> shortValues(n - 1), longValues(n + 1);
+
+		Paxos<u16> paxos;
+		paxos.init(n, 3, 40, PaxosParam::GF128, block(5, 6));
+		std::vector<block> p(paxos.size());
+		std::vector<block> shortP(paxos.size() - 1), longP(paxos.size() + 1);
+
+		paxos.setInput(items);
+		expectThrows([&]() { paxos.encode<block>(shortValues, p); });
+		expectThrows([&]() { paxos.encode<block>(longValues, p); });
+		expectThrows([&]() { paxos.encode<block>(values, shortP); });
+		expectThrows([&]() { paxos.encode<block>(values, longP); });
+		paxos.encode<block>(values, p);
+
+		expectThrows([&]() { paxos.decode<block>(items, shortValues, p); });
+		expectThrows([&]() { paxos.decode<block>(items, longValues, p); });
+		expectThrows([&]() { paxos.decode<block>(items, decoded, shortP); });
+		expectThrows([&]() { paxos.decode<block>(items, decoded, longP); });
+		paxos.decode<block>(items, decoded, p);
+		if (decoded != values)
+			throw RTE_LOC;
+
+		// binSize 32 gives two bins; binSize 64 takes the single-bin path.
+		for (u64 binSize : { u64(32), u64(64) })
+		{
+			Baxos baxos;
+			baxos.init(n, binSize, 3, 40, PaxosParam::GF128, block(9, 10));
+			if (baxos.mNumBins != n / binSize)
+				throw RTE_LOC;
+			std::vector<block> bp(baxos.size());
+			std::vector<block> shortBp(baxos.size() - 1), longBp(baxos.size() + 1);
+
+			expectThrows([&]() { baxos.solve<block>(shortItems, values, bp); });
+			expectThrows([&]() { baxos.solve<block>(items, shortValues, bp); });
+			expectThrows([&]() { baxos.solve<block>(items, longValues, bp); });
+			expectThrows([&]() { baxos.solve<block>(items, values, shortBp); });
+			expectThrows([&]() { baxos.solve<block>(items, values, longBp); });
+			baxos.solve<block>(items, values, bp);
+
+			PxVector<const block> pxShortVals(shortValues), pxVals(values);
+			PxVector<block> pxOut(bp);
+			auto h = pxOut.defaultHelper();
+			expectThrows([&]() { baxos.implParSolve<u16>(shortItems, pxVals, pxOut, nullptr, 1, h); });
+			expectThrows([&]() { baxos.implParSolve<u16>(items, pxShortVals, pxOut, nullptr, 1, h); });
+
+			expectThrows([&]() { baxos.decode<block>(shortItems, values, bp); });
+			expectThrows([&]() { baxos.decode<block>(items, shortValues, bp); });
+			expectThrows([&]() { baxos.decode<block>(items, longValues, bp); });
+			expectThrows([&]() { baxos.decode<block>(items, decoded, shortBp); });
+			expectThrows([&]() { baxos.decode<block>(items, decoded, longBp); });
+			std::fill(decoded.begin(), decoded.end(), ZeroBlock);
+			baxos.decode<block>(items, decoded, bp);
+			if (decoded != values)
+				throw RTE_LOC;
+
+			// Two blocks per row: sizes are counted in rows, not elements.
+			const u64 cols = 2;
+			Matrix<block> mValues(n, cols), mDecoded(n, cols);
+			Matrix<block> mTable(baxos.size(), cols);
+			Matrix<block> mShortValues(n - 1, cols);
+			Matrix<block> mShortTable(baxos.size() - 1, cols);
+			prng.get(mValues.data(), mValues.size());
+			MatrixView<const block> mValuesView(mValues.data(), n, cols);
+			MatrixView<const block> mTableView(mTable.data(), baxos.size(), cols);
+			MatrixView<const block> mShortValuesView(mShortValues.data(), n - 1, cols);
+			MatrixView<const block> mShortTableView(mShortTable.data(), baxos.size() - 1, cols);
+
+			expectThrows([&]() { baxos.solve<block>(items, mShortValuesView, MatrixView<block>(mTable)); });
+			expectThrows([&]() { baxos.solve<block>(items, mValuesView, MatrixView<block>(mShortTable)); });
+			baxos.solve<block>(items, mValuesView, MatrixView<block>(mTable));
+
+			expectThrows([&]() { baxos.decode<block>(items, MatrixView<block>(mShortValues), mTableView); });
+			expectThrows([&]() { baxos.decode<block>(items, MatrixView<block>(mDecoded), mShortTableView); });
+			baxos.decode<block>(items, MatrixView<block>(mDecoded), mTableView);
+			if (mDecoded != mValues)
+				throw RTE_LOC;
+		}
+	}
+}
+
 
