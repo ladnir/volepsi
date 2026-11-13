@@ -1926,4 +1926,229 @@ void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd)
 	});
 }
 
+void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
+{
+	auto expectThrows = [](auto&& fn)
+	{
+		bool threw = false;
+		try
+		{
+			fn();
+		}
+		catch (const std::runtime_error&)
+		{
+			threw = true;
+		}
+		if (!threw)
+			throw RTE_LOC;
+	};
+
+	// 1a. mSparseSize == 255 (numItems=110, binSize=110, weight=6, ssp=40) must select
+	// IdxType = u16 because the dense columns take the total above 255.
+	{
+		const u64 numItems = 110;
+		const u64 binSize = 110;
+		Baxos baxos;
+		baxos.init(numItems, binSize, 6, 40, PaxosParam::GF128, block(3, 5));
+		if (baxos.mPaxosParam.mSparseSize != 255)
+			throw RTE_LOC;
+		PRNG prng(block(7, 9));
+		std::vector<block> items(numItems), values(numItems), decoded(numItems);
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		std::vector<block> table(baxos.size(), ZeroBlock);
+		baxos.solve<block>(items, values, table);
+		baxos.decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+	}
+
+	// 1b. mPaxosParam.size() == 255 (numItems=134, binSize=134, weight=3, ssp=40,
+	// mSparseSize=250) still fits u8: the last column index is 254, not sentinel 255.
+	{
+		const u64 numItems = 134;
+		const u64 binSize = 134;
+		Baxos baxos;
+		baxos.init(numItems, binSize, 3, 40, PaxosParam::GF128, block(3, 5));
+		if (baxos.mPaxosParam.size() != 255)
+			throw RTE_LOC;
+		PRNG prng(block(7, 9));
+		std::vector<block> items(numItems), values(numItems), decoded(numItems);
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		std::vector<block> table(baxos.size(), ZeroBlock);
+		baxos.solve<block>(items, values, table);
+		baxos.decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+	}
+
+	// 1c. mSparseSize <= 254 with mPaxosParam.size() > 255 (weight=2, Binary) must select
+	// IdxType = u16 in Baxos and be rejected by Paxos<u8>::init.
+	{
+		const u64 numItems = 127;
+		const u64 binSize = 127;
+		Baxos baxos;
+		baxos.init(numItems, binSize, 2, 40, PaxosParam::Binary, block(3, 5));
+		if (baxos.mPaxosParam.mSparseSize != 254 || baxos.mPaxosParam.size() <= 255)
+			throw RTE_LOC;
+		expectThrows([&]() {
+			Paxos<u8> p;
+			p.init(numItems, baxos.mPaxosParam, ZeroBlock);
+		});
+		PRNG prng(block(19, 23));
+		std::vector<block> items(numItems), values(numItems), decoded(numItems);
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		std::vector<block> table(baxos.size(), ZeroBlock);
+		baxos.solve<block>(items, values, table);
+		baxos.decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+	}
+
+	// 1d. The maximum column count fits; one additional column uses the sentinel.
+	auto checkBoundary = [&]<typename IdxType>()
+	{
+		PaxosParam param;
+		param.mWeight = 3;
+		param.mSparseSize = u64(std::numeric_limits<IdxType>::max()) - 5;
+		param.mG = param.mDenseSize = 5;
+		param.mDt = PaxosParam::GF128;
+		Paxos<IdxType> p;
+		p.init(100, param, ZeroBlock);
+		PRNG prng(block(13, 17));
+		std::vector<block> items(100), values(100), decoded(100), table(p.size());
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		p.setInput(items);
+		p.template encode<block>(values, table);
+		p.template decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+		auto triangulation = p.getTriangulization();
+		if (triangulation.mPerm.mColPerm.mDst2Src.size() != p.size())
+			throw RTE_LOC;
+
+		++param.mDenseSize;
+		expectThrows([&]() {
+			Paxos<IdxType> oversized;
+			oversized.init(100, param, ZeroBlock);
+		});
+	};
+	checkBoundary.template operator()<u8>();
+	checkBoundary.template operator()<u16>();
+
+	// 2. PaxosParam::init enforces ssp >= 20 while still supporting weight == 2 and
+	// high GF128 ssp. Only GF128 requires a nonempty dense part.
+	expectThrows([]() { PaxosParam p(64, 3, 0, PaxosParam::GF128); });
+	expectThrows([]() { PaxosParam p(64, 3, 0, PaxosParam::Binary); });
+	expectThrows([]() { PaxosParam p(64, 3, 19, PaxosParam::GF128); });
+	expectThrows([]() { PaxosParam p(64, 3, 19, PaxosParam::Binary); });
+	expectThrows([]() { PaxosParam p(64, 3, 64, PaxosParam::Binary); });
+	expectThrows([]() { PaxosParam p(64, 2, 64, PaxosParam::Binary); });
+	{
+		PaxosParam param;
+		param.mWeight = 3;
+		param.mSparseSize = 255;
+		param.mG = param.mDenseSize = 0;
+		param.mDt = PaxosParam::Binary;
+		Paxos<u8> p;
+		p.init(41, param, ZeroBlock);
+		PRNG prng(block(13, 17));
+		std::vector<block> items(41), values(41), decoded(41), table(p.size());
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		p.setInput(items);
+		for (bool randomized : {false, true})
+		{
+			p.encode<block>(values, table, randomized ? &prng : nullptr);
+			p.decode<block>(items, decoded, table);
+			if (decoded != values)
+				throw RTE_LOC;
+		}
+		auto triangulation = p.getTriangulization();
+		if (triangulation.mGap != 0 || triangulation.mPerm.mColPerm.mDst2Src.size() != 255)
+			throw RTE_LOC;
+		param.mDt = PaxosParam::GF128;
+		expectThrows([&]() { param.validate(); });
+	}
+	{
+		for (auto dt : { PaxosParam::GF128, PaxosParam::Binary })
+		{
+			PaxosParam p20(64, 3, 20, dt);
+			Paxos<u16> paxos;
+			paxos.init(64, p20, ZeroBlock);
+		}
+		PaxosParam p256(64, 3, 256, PaxosParam::GF128);
+		Paxos<u16> paxos;
+		paxos.init(64, p256, ZeroBlock);
+	}
+
+	// 3. Binary dense mDenseSize > 64 and mismatched state are caught at runtime in
+	// Paxos::encode, backfillBinary, decode32, decode8, decode1, and Baxos::solve.
+	{
+		Paxos<u16> p;
+		p.init(64, 3, 40, PaxosParam::Binary, ZeroBlock);
+		std::vector<block> items(64), values(64, ZeroBlock), table(p.size(), ZeroBlock);
+		for (u64 i = 0; i < items.size(); ++i)
+			items[i] = block(1, i);
+		p.setInput(items);
+
+		// Mismatched values size passed to encode.
+		expectThrows([&]() {
+			std::vector<block> shortVals(63, ZeroBlock);
+			p.encode<block>(shortVals, table);
+		});
+
+		// Post-init Binary mDenseSize > 64 rejected across encode and decode paths.
+		Paxos<u16> pBad;
+		pBad.init(64, 3, 40, PaxosParam::Binary, ZeroBlock);
+		pBad.setInput(items);
+		pBad.mDenseSize = 65;
+		expectThrows([&]() {
+			std::vector<block> bigTable(pBad.size(), ZeroBlock);
+			pBad.encode<block>(values, bigTable);
+		});
+
+		std::vector<u16> dummyRows(32 * 3, 0);
+		std::vector<block> dummyDense(32, ZeroBlock), outVals(32, ZeroBlock);
+		std::vector<block> bigTable(pBad.size(), ZeroBlock);
+		PxVector<block> V(outVals);
+		PxVector<const block> PP(bigTable);
+		auto h = V.defaultHelper();
+		expectThrows([&]() {
+			pBad.decode32(dummyRows.data(), dummyDense.data(), outVals.data(), PP, h);
+		});
+		expectThrows([&]() {
+			pBad.decode8(dummyRows.data(), dummyDense.data(), outVals.data(), PP, h);
+		});
+		expectThrows([&]() {
+			pBad.decode1(dummyRows.data(), dummyDense.data(), outVals.data(), PP, h);
+		});
+
+		// Uninitialized or post-init corrupted Baxos::solve/decode throws cleanly.
+		expectThrows([&]() {
+			Baxos uninit;
+			std::vector<block> oneItem(1, ZeroBlock), oneVal(1, ZeroBlock), emptyOut;
+			uninit.solve<block>(oneItem, oneVal, emptyOut);
+		});
+		expectThrows([&]() {
+			Baxos b;
+			b.init(64, 32, 3, 40, PaxosParam::GF128, ZeroBlock);
+			std::vector<block> bTable(b.size(), ZeroBlock);
+			b.mNumBins = 0;
+			b.solve<block>(items, values, bTable);
+		});
+		expectThrows([&]() {
+			Baxos b;
+			b.init(64, 32, 3, 40, PaxosParam::Binary, ZeroBlock);
+			std::vector<block> bTable(b.size(), ZeroBlock);
+			std::vector<block> bVals(items.size(), ZeroBlock);
+			b.mPaxosParam.mDenseSize = 65;
+			b.decode<block>(items, bVals, bTable);
+		});
+	}
+}
+
 
