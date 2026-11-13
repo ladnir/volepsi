@@ -204,7 +204,7 @@ namespace volePSI
 
 				encode<block>(
 					MatrixView<const block>((block*)values.data(), n, m), 
-					MatrixView<block>((block*)output.data(), n, m),
+					MatrixView<block>((block*)output.data(), output.rows(), m),
 					prng);
 			}
 			else

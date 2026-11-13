@@ -87,7 +87,7 @@ namespace volePSI
 				// is non-zero
 				for (u64 j = i + 1; j < n; ++j)
 				{
-					if (mtx(j, i) == oc::OneBlock)
+					if (mtx(j, i) != oc::ZeroBlock)
 					{
 						// found one, swap the rows and break
 						for (u64 k = 0; k < n; ++k)
@@ -959,10 +959,9 @@ namespace volePSI
 		setTimePoint("decode begin");
 
 		validate();
-		if (!mHasher.isConfiguredFor(mWeight, mSparseSize) || values.size() < inputs.size())
-			throw RTE_LOC;
-
-		if (PP.size() != size())
+		if (!mHasher.isConfiguredFor(mWeight, mSparseSize) ||
+			static_cast<u64>(values.size()) != inputs.size() ||
+			static_cast<u64>(PP.size()) != size())
 			throw RTE_LOC;
 
 		auto main = inputs.size() / gPaxosBuildRowSize * gPaxosBuildRowSize;
@@ -2662,8 +2661,9 @@ namespace volePSI
 	{
 		mPaxosParam.validate();
 		if (mWeight < 2 || mWeight > maxWeight || mPaxosParam.mWeight != mWeight ||
-			!mNumBins || inputs.size() > mNumItems || V.size() < inputs.size() ||
-			P.size() != size())
+			!mNumBins || inputs.size() != mNumItems ||
+			static_cast<u64>(V.size()) != mNumItems ||
+			static_cast<u64>(P.size()) != size())
 			throw RTE_LOC;
 
 		// Select the smallest IdxType whose non-sentinel range fits all column indices [0, size()).
@@ -2691,6 +2691,12 @@ namespace volePSI
 		u64 numThreads,
 		Helper& h)
 	{
+		mPaxosParam.validate();
+		if (mWeight < 2 || mWeight > maxWeight || mPaxosParam.mWeight != mWeight ||
+			!mNumBins || inputs_.size() != mNumItems ||
+			static_cast<u64>(vals_.size()) != mNumItems ||
+			static_cast<u64>(p_.size()) != size())
+			throw RTE_LOC;
 #ifndef NDEBUG
 		{
 			std::unordered_set<block> inputSet;
@@ -2700,8 +2706,6 @@ namespace volePSI
 			}
 		}
 #endif
-		if (p_.size() != size())
-			throw RTE_LOC;
 
 		if (mNumBins == 1)
 		{
@@ -3289,7 +3293,8 @@ namespace volePSI
 	{
 		mPaxosParam.validate();
 		if (mWeight < 2 || mWeight > maxWeight || mPaxosParam.mWeight != mWeight ||
-			!mNumBins || pp.size() != size() || values.size() < inputs.size())
+			!mNumBins || static_cast<u64>(values.size()) != inputs.size() ||
+			static_cast<u64>(pp.size()) != size())
 			throw RTE_LOC;
 		if (inputs.empty())
 			return;

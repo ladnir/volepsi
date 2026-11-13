@@ -28,6 +28,7 @@ void Baxos_bin_overflow_Test(const oc::CLP& cmd);
 void Baxos_bin_size_Test(const oc::CLP& cmd);
 void Baxos_decode_weight_overflow_Test(const oc::CLP& cmd);
 void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP& cmd);
+void Paxos_bounds_and_gf128Inv_Test(const oc::CLP& cmd);
 
 
 
