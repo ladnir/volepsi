@@ -48,7 +48,7 @@ namespace volePSI
 			for (u64 i = 0; i < mRecverOT.size(); i++)
 				mBase.mRecvChoiceBits.append(mRecverOT[i].sampleBaseChoiceBits(mPrng));
 			for (u64 i = 0; i < mSenderOT.size(); i++)
-				mBase.mNumSend += mSenderOT[i].silentBaseOtCount();
+				mBase.mNumSend += mSenderOT[i].baseCount().mBaseOtCount;
 		}
 		return mBase;
 	}
@@ -59,14 +59,20 @@ namespace volePSI
 
 		for (u64 i = 0; i < mSenderOT.size(); i++)
 		{
-			mSenderOT[i].setSilentBaseOts(sendOts.subspan(0, mSenderOT[i].silentBaseOtCount()));
-			sendOts = sendOts.subspan(mSenderOT[i].silentBaseOtCount());
+			auto count = mSenderOT[i].baseCount().mBaseOtCount;
+			// Regular noise needs only base OTs and a fresh sender correlation.
+			mSenderOT[i].setBaseCors(sendOts.subspan(0, count), {}, mPrng.get());
+			sendOts = sendOts.subspan(count);
 		}
 
+		u64 choiceOffset = 0;
 		for (u64 i = 0; i < mRecverOT.size(); i++)
 		{
-			mRecverOT[i].setSilentBaseOts(recvOts.subspan(0, mRecverOT[i].silentBaseOtCount()));
-			recvOts = recvOts.subspan(mRecverOT[i].silentBaseOtCount());
+			auto count = mRecverOT[i].baseCount().mBaseOtCount;
+			auto choices = mBase.mRecvChoiceBits.subvec(choiceOffset, count);
+			mRecverOT[i].setBaseCors(recvOts.subspan(0, count), choices, {}, {});
+			recvOts = recvOts.subspan(count);
+			choiceOffset += count;
 		}
 
 		mHasBase = true;

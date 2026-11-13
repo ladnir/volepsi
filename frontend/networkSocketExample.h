@@ -20,14 +20,10 @@ void networkSocketExampleRun(const oc::CLP& cmd)
         // Malicious Security.
         auto mal = cmd.isSet("malicious");
 
-        // The vole type, default to expand accumulate.
+        if (cmd.isSet("useSilver") || cmd.isSet("useQC"))
+            throw std::invalid_argument("Silver and QuasiCyclic are not supported for PSI GF128 VOLE.");
+        // Use libOTe's default VOLE encoder.
         auto type = oc::DefaultMultType;
-#ifdef ENABLE_INSECURE_SILVER
-        type = cmd.isSet("useSilver") ? oc::MultType::slv5 : type;
-    #endif
-#ifdef ENABLE_BITPOLYMUL
-        type = cmd.isSet("useQC") ? oc::MultType::QuasiCyclic : type;
-#endif
 
         // use fewer rounds of communication but more computation.
         auto useReducedRounds = cmd.isSet("reducedRounds");
