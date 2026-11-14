@@ -14,7 +14,7 @@
 
 namespace volePSI
 {
-    inline constexpr oc::MultType DefaultVoleMultType = oc::MultType::ChosenBaa16x8;
+    inline constexpr oc::MultType DefaultVoleMultType = oc::MultType::ChosenBaa30;
 
     class RsOprfSender : public oc::TimerAdapter
     {
