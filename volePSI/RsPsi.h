@@ -16,6 +16,14 @@ namespace volePSI
 {
     namespace details
     {
+        struct PsiHash
+        {
+            size_t operator()(const block& value) const { return value.get<size_t>(0); }
+        };
+        struct PsiHashTable : google::dense_hash_map<block, u64, PsiHash>
+        {
+            PsiHashTable() { set_empty_key(oc::ZeroBlock); }
+        };
         struct RsPsiBase
         {
 
@@ -44,6 +52,11 @@ namespace volePSI
 
 
         Proto run(span<block> inputs, Socket& chl);
+
+        // Call only between runs. Does not reset the OPRF/VOLE state.
+        void releaseHashBuffers() { mHashes.clear(); }
+    private:
+        oc::AlignedUnVector<block> mHashes;
     };
 
 
@@ -56,5 +69,11 @@ namespace volePSI
         std::vector<u64> mIntersection;
 
         Proto run(span<block> inputs, Socket& chl);
+
+        // Call only between runs. Does not reset the OPRF/VOLE state.
+        void releaseHashBuffers() { mHashStorage.clear(); mTables.clear(); }
+    private:
+        oc::AlignedUnVector<block> mHashStorage;
+        std::vector<std::unique_ptr<details::PsiHashTable>> mTables;
     };
 }

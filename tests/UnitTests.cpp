@@ -77,6 +77,7 @@ namespace volePSI_Tests
         t.add("Psi_Rs_reduced_test         ", Psi_Rs_reduced_test);
         t.add("Psi_Rs_multiThrd_test       ", Psi_Rs_multiThrd_test);
         t.add("Psi_Rs_mal_test             ", Psi_Rs_mal_test);
+        t.add("Psi_Rs_reuse_test           ", Psi_Rs_reuse_test);
                                            
 #ifdef VOLE_PSI_ENABLE_CPSI
         t.add("Cpsi_Rs_empty_test          ", Cpsi_Rs_empty_test);
