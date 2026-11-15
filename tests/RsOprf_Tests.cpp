@@ -130,7 +130,7 @@ void RsOprf_mal_test(const CLP&)
 void RsOprf_reduced_test(const CLP&)
 {
     for (bool malicious : {false, true})
-    for (auto mult : {DefaultMultType, MultType::ExConv7x24})
+    for (auto mult : {DefaultVoleMultType, MultType::ChosenBaa16x4, DefaultMultType, MultType::ExConv7x24})
     {
         RsOprfSender sender;
         RsOprfReceiver recver;

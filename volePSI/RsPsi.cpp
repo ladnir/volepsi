@@ -7,17 +7,47 @@ namespace volePSI
 
 
 
-	template <typename T>
-	struct Buffer : public span<T>
-	{
-		std::unique_ptr<T[]> mPtr;
+    namespace
+    {
+        // Keep SIMD scratch on an ordinary stack, outside the coroutine frame.
+        OC_NOINLINE void insertHashes(details::PsiHashTable& map,
+            span<const block> hashes, block mask)
+        {
+            constexpr u64 batchSize = 128;
+            std::array<std::pair<block, u64>, batchSize> batch;
+            u64 i = 0;
+            for (; i + batchSize <= hashes.size(); i += batchSize)
+            {
+                for (u64 j = 0; j < batchSize; ++j)
+                    batch[j] = { hashes[i + j] & mask, i + j };
+                map.insert(batch.begin(), batch.end());
+            }
+            for (; i < hashes.size(); ++i) map.insert({ hashes[i] & mask, i });
+        }
 
-		void resize(u64 s)
-		{
-			mPtr.reset(new T[s]);
-			static_cast<span<T>&>(*this) = span<T>(mPtr.get(), s);
-		}
-	};
+        template<typename Visitor>
+        OC_NOINLINE void visitHashes(span<const u8> bytes, u64 width, block mask, Visitor&& visit)
+        {
+            if (!width || width > sizeof(block) || bytes.size() % width)
+                throw std::invalid_argument("Invalid PSI hash width.");
+            auto ptr = bytes.data();
+            auto remaining = bytes.size();
+            // Only load a full block when all of its bytes are in the received
+            // buffer. Mask away bytes belonging to the following hash.
+            for (; remaining >= sizeof(block); remaining -= width, ptr += width)
+            {
+                block h;
+                std::memcpy(&h, ptr, sizeof(h));
+                visit(h & mask);
+            }
+            for (; remaining; remaining -= width, ptr += width)
+            {
+                block h = oc::ZeroBlock;
+                std::memcpy(&h, ptr, width);
+                visit(h);
+            }
+        }
+    }
 
 	void details::RsPsiBase::init(
 		u64 senderSize,
@@ -46,7 +76,7 @@ namespace volePSI
 	Proto RsPsiSender::run(span<block> inputs, Socket& chl)
 	{
 
-		auto hashes = Buffer<u8>{};
+		auto hashes = span<u8>{};
 		setTimePoint("RsPsiSender::run-begin");
 
 		if (mTimer)
@@ -60,7 +90,8 @@ namespace volePSI
 
 		setTimePoint("RsPsiSender::run-opprf");
 
-		hashes.resize(inputs.size() * sizeof(block));
+		mHashes.resize(inputs.size());
+        hashes = span<u8>(reinterpret_cast<u8*>(mHashes.data()), inputs.size() * sizeof(block));
 		mSender.eval(inputs, span<block>((block*)hashes.data(), inputs.size()), mNumThreads);
 
 		setTimePoint("RsPsiSender::run-eval");
@@ -85,19 +116,10 @@ namespace volePSI
 			static_cast<span<u8>&>(hashes) = span<u8>((u8*)hashes.data(), dest);
 		}
 
-		co_await chl.send(std::move(hashes));
+		// Await completion before this reusable storage can be overwritten.
+        co_await chl.send(hashes);
 		setTimePoint("RsPsiSender::run-sendHash");
 
-	}
-
-	namespace {
-		struct NoHash
-		{
-			inline size_t operator()(const block& v) const
-			{
-				return v.get<size_t>(0);
-			}
-		};
 	}
 
 	Proto RsPsiReceiver::run(span<block> inputs, Socket& chl)
@@ -121,25 +143,20 @@ namespace volePSI
 			libdivide::libdivide_u32_t divider;
 		};
 
-		auto data = std::unique_ptr<u8[]>{};
 		auto myHashes = span<block>{};
 		auto theirHashes = oc::MatrixView<u8>{};
-		auto map = google::dense_hash_map<block, u64, NoHash>{};
 		auto i = u64{};
-		auto main = u64{};
-		auto hh = std::array<std::pair<block, u64>, 128> {};
 		auto mt = std::unique_ptr<MultiThread>{};
 		auto mask = block{};
 
 		setTimePoint("RsPsiReceiver::run-begin");
 		mIntersection.clear();
 
-		data = std::unique_ptr<u8[]>(new u8[
-			mSenderSize * mMaskSize +
-				mRecverSize * sizeof(block)]);
-
-		myHashes = span<block>((block*)data.get(), mRecverSize);
-		theirHashes = oc::MatrixView<u8>((u8*)((block*)data.get() + mRecverSize), mSenderSize, mMaskSize);
+        mHashStorage.resize(mRecverSize + oc::divCeil(mSenderSize * mMaskSize, sizeof(block)));
+        myHashes = span<block>(mHashStorage.data(), mRecverSize);
+        theirHashes = oc::MatrixView<u8>(reinterpret_cast<u8*>(mHashStorage.data() + mRecverSize), mSenderSize, mMaskSize);
+        while (mTables.size() < std::max<u64>(1, mNumThreads))
+            mTables.emplace_back(std::make_unique<details::PsiHashTable>());
 
 		setTimePoint("RsPsiReceiver::run-alloc");
 
@@ -161,39 +178,12 @@ namespace volePSI
 		if (mNumThreads < 2)
 		{
 
-			map.resize(myHashes.size());
-			setTimePoint("RsPsiReceiver::run-reserve");
-			map.set_empty_key(oc::ZeroBlock);
-			setTimePoint("RsPsiReceiver::run-set_empty_key");
-
-			main = mRecverSize / batchSize * batchSize;
-
-			if (!mCompress)
-			{
-
-				for (i = 0; i < main; i += batchSize)
-				{
-					for (u64 j = 0; j < batchSize; ++j)
-						hh[j] = { myHashes[i + j], i + j };
-
-					map.insert(hh.begin(), hh.end());
-				}
-				for (; i < mRecverSize; ++i)
-					map.insert({ myHashes[i], i });
-			}
-			else
-			{
-
-				for (i = 0; i < main; i += batchSize)
-				{
-					for (u64 j = 0; j < batchSize; ++j)
-						hh[j] = { myHashes[i + j] & mask, i + j };
-
-					map.insert(hh.begin(), hh.end());
-				}
-				for (; i < mRecverSize; ++i)
-					map.insert({ myHashes[i] & mask, i });
-			}
+            auto& map = *mTables[0];
+            map.clear_no_resize();
+            map.resize(myHashes.size());
+            setTimePoint("RsPsiReceiver::run-reserve");
+            setTimePoint("RsPsiReceiver::run-set_empty_key");
+            insertHashes(map, myHashes, mask);
 
 			setTimePoint("RsPsiReceiver::run-insert");
 
@@ -201,21 +191,11 @@ namespace volePSI
 
 			setTimePoint("RsPsiReceiver::run-recv");
 
-			{
-				block h = oc::ZeroBlock;
-				auto iter = theirHashes.data();
-				for (i = 0; i < mSenderSize; ++i)
-				{
-					memcpy(&h, iter, mMaskSize);
-					iter += mMaskSize;
-
-					auto iter = map.find(h);
-					if (iter != map.end())
-					{
-						mIntersection.push_back(iter->second);
-					}
-				}
-			}
+            visitHashes({ theirHashes.data(), mSenderSize * mMaskSize }, mMaskSize, mask,
+                [&](block h) {
+                    auto found = map.find(h);
+                    if (found != map.end()) mIntersection.push_back(found->second);
+                });
 
 			setTimePoint("RsPsiReceiver::run-find");
 		}
@@ -240,8 +220,9 @@ namespace volePSI
 						setTimePoint("RsPsiReceiver::run-threadBegin");
 
 					auto& divider = mt->divider;
-					google::dense_hash_map<block, u64, NoHash> map(mt->binSize);
-					map.set_empty_key(oc::ZeroBlock);
+					auto& map = *mTables[thrdIdx];
+                    map.clear_no_resize();
+                    map.resize(mt->binSize);
 
 					if (!thrdIdx)
 						setTimePoint("RsPsiReceiver::run-set_empty_key_par");
@@ -282,28 +263,16 @@ namespace volePSI
 					u64 intersectionSize = 0;
 					u64* intersection = (u64*)&myHashes[begin];
 
-					{
-						block h = oc::ZeroBlock;
-						auto iter = theirHashes.data();
-						for (i = 0; i < mSenderSize; ++i)
-						{
-							memcpy(&h, iter, mMaskSize);
-							iter += mMaskSize;
-
-							auto v = h.get<u32>(0);
-							auto k = libdivide::libdivide_u32_do(v, &divider);
-							v -= k * mNumThreads;
-							if (v == thrdIdx)
-							{
-								auto iter = map.find(h);
-								if (iter != map.end())
-								{
-									intersection[intersectionSize] = iter->second;
-									++intersectionSize;
-								}
-							}
-						}
-					}
+                    visitHashes({ theirHashes.data(), mSenderSize * mMaskSize }, mMaskSize, mask,
+                        [&](block h) {
+                            auto v = h.get<u32>(0);
+                            auto k = libdivide::libdivide_u32_do(v, &divider);
+                            if (v - k * mNumThreads == thrdIdx)
+                            {
+                                auto found = map.find(h);
+                                if (found != map.end()) intersection[intersectionSize++] = found->second;
+                            }
+                        });
 
 					if (!thrdIdx)
 						setTimePoint("RsPsiReceiver::run-find_par");

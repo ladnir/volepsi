@@ -15,3 +15,4 @@ void Psi_Rs_full_test(const oc::CLP&);
 void Psi_Rs_reduced_test(const oc::CLP&);
 void Psi_Rs_multiThrd_test(const oc::CLP&);
 void Psi_Rs_mal_test(const oc::CLP&);
+void Psi_Rs_reuse_test(const oc::CLP&);
