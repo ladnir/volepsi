@@ -1,0 +1,104 @@
+Random-band OKVS: a concrete rank bound (working audit, 2026-11-15)
+
+Construction and scope
+----------------------
+Fix n distinct keys, m columns, and band width w, with M=m-w+1>n.
+For every key, independently sample a uniform start in {0,...,M-1}
+and w independent fair coefficient bits. All other coefficients are zero.
+The key set is fixed before these random choices. Coefficients are binary;
+right-hand sides and output cells may be GF(2^128) elements. The rank over
+GF(2) equals the rank over GF(2^128). No leading coefficient is forced to one.
+
+The encoder sorts rows by their start, eliminates from left to right, and
+returns failure on a zero residual row. On success it samples free cells
+uniformly and back-substitutes. A retry uses an independent matrix seed.
+This note bounds one attempt; it does not analyze public retry-seed leakage,
+adaptive key selection, malicious OPRF security, or an AES instantiation of
+the ideal random functions. A production integration must handle those.
+
+Claim
+-----
+Choose n/M < rho < 1 and 1<t<2 satisfying
+  a = exp(rho*(t-1))/t < 1.
+Set
+  b = (1-1/t)*exp(rho*(t/2-1)), C=max(1,b/(1-a)), mu=M*rho.
+Then the probability that the n-by-m matrix lacks full row rank is at most
+
+  exp(-mu+n+n*ln(mu/n)) + mu*C*exp(rho*(t-1))*t^(-w).             (1)
+
+This is an upper bound, not an estimate of the actual failure rate.
+The accompanying bound.py selects explicit witnesses rho,t for (1).
+
+Proof
+-----
+Sorting by start prevents elimination from extending a row beyond its
+original band. Given all preceding rows, coefficients at unoccupied pivot
+positions in the current band remain independent fair bits: elimination
+adds a vector determined by preceding rows to the current uniform vector.
+Thus pivot selection is equivalent to trying each free position in order
+with a fresh fair coin. For analysis only, extend each row indefinitely to
+the right with fresh bits. The first failure of the finite-band algorithm
+occurs exactly when this unbounded insertion first displaces a row by >=w.
+This is the elementary elimination/coin-flipping equivalence in
+Dietzfelbinger-Walzer, ESA 2019, Sections 2.2-2.4; the quantitative bound
+below is derived directly instead of invoking their queue-tail constants.
+
+First Poissonize: put independent Z_j~Poisson(rho) arrivals at each start j.
+The total N is Poisson(mu). Conditional on N, these are N uniform starts.
+Couple the fixed-n experiment to the first n rows of that experiment when
+N>=n, before sorting. A dependence among those rows remains a dependence
+after adding rows. The exceptional probability Pr[N<n] is at most the
+first term of (1), by the Poisson Chernoff bound with threshold n.
+
+Let H_j count rows starting at or before j that occupy positions after j
+in the unbounded insertion process. Set H_{-1}=0. Given H_{j-1}=h and
+Z_j=z, the number eligible at j is q=h+z. Position j remains unoccupied
+exactly when all q coins are zero, with probability 2^(-q). Therefore
+  H_j=q-1+B,  Pr[B=1 | q]=2^(-q).
+This includes q=0, when B=1 and H_j=0. Fresh coefficient bits at each
+column justify this conditional distribution even after previous columns
+have been exposed. For t in (1,2), direct calculation gives
+
+  E[t^H_j | H_{j-1}=h]
+    = a*t^h + (1-1/t)*(t/2)^h*exp(rho*(t/2-1))
+    <= a*t^h+b.
+
+Induction yields E[t^H_j]<=C for every j. This step needs rho<1 and a<1;
+it does not use the invalid supercritical queue in RB-OKVS's conference
+Appendix A.1 (pages 317-318).
+
+For any row starting at j, at most H_{j-1}+Z_j-1 preceding rows can occupy
+positions at or beyond j. Conditioned on preceding rows and all starts,
+the probability that the current row finds no pivot in its w positions is
+at most min(1,2^(H_{j-1}+Z_j-1-w)). Here H_{j-1} depends only on rows
+starting before j, so is independent of Z_j and current-row coins.
+For every real x, min(1,2^x)<=t^x. Summing over the Z_j rows and taking
+expectations bounds their total failure probability by
+
+  t^(-w)*E[t^H_{j-1}]*E[Z_j*t^(Z_j-1)]
+    <= t^(-w)*C*rho*exp(rho*(t-1)).
+
+Sum over M starts, then add the Poissonization exception. This proves (1).
+The use of unbounded insertions after any earlier failure is only a
+coupling device; the first finite failure is included in this union bound.
+
+Uniform-output lemma (separate from the rank bound)
+--------------------------------------------------
+Fix a successful matrix A. Let J be its nonpivot columns, so |J|=m-n.
+The linear map s -> (A*s,s_J) is a bijection. Consequently uniform,
+independent input values v and free cells r yield a uniform output s.
+For arbitrary fixed v, the same algorithm samples uniformly from A*s=v.
+These are different claims. A fixed nonzero query row applied to uniform
+s has a uniform field value, but this does not establish independence
+from known programmed values or security for adaptively selected queries.
+An all-zero query row has probability 2^(-w) in the ideal model; that event
+must be included whenever uniform nonmember decoding is required.
+
+References and audit status
+---------------------------
+Dietzfelbinger and Walzer, ESA 2019:
+https://drops.dagstuhl.de/entities/document/10.4230/LIPIcs.ESA.2019.39
+Bienstock, Patel, Seo and Yeo, USENIX Security 2023:
+https://www.usenix.org/system/files/usenixsecurity23-bienstock.pdf
+The bound above is a new derivation checked algebraically in this work,
+not a claim of independent peer review or a completed PSI security proof.

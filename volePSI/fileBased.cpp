@@ -373,6 +373,7 @@ namespace volePSI
 
                 sender.mDebug = debug;
                 sender.setMultType(type);
+                sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
                 sender.init(set.size(), theirSize, statSetParam, seed, mal, 1);
                 macoro::sync_wait(sender.run(set, chl));
                 macoro::sync_wait(chl.flush());
@@ -388,6 +389,7 @@ namespace volePSI
 
                 recver.mDebug = debug;
                 recver.setMultType(type);
+                recver.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
                 recver.init(theirSize, set.size(), statSetParam, seed, mal, 1);
                 macoro::sync_wait(recver.run(set, chl));
                 macoro::sync_wait(chl.flush());

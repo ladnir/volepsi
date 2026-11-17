@@ -100,6 +100,7 @@ void networkSocketExampleRun(const oc::CLP& cmd)
             // configure
             volePSI::RsPsiSender sender;
             sender.setMultType(type);
+            sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
             sender.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
             std::cout << "sender start\n";
@@ -121,6 +122,7 @@ void networkSocketExampleRun(const oc::CLP& cmd)
             // Configure.
             volePSI::RsPsiReceiver recevier;
             recevier.setMultType(type);
+            recevier.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
             recevier.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
             std::cout << "recver start\n";

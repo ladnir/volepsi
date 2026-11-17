@@ -9,6 +9,7 @@
 // THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 
+#include "volePSI/PaxosGf128.h"
 #include <atomic>
 #include <exception>
 #include <stdexcept>
@@ -266,8 +267,56 @@ namespace volePSI
 	}
 #endif
 
+#ifdef ENABLE_SSE
+    inline __m256i paxosMullo64(__m256i x, __m256i y)
+    {
+#if defined(__AVX512DQ__) && defined(__AVX512VL__)
+        return _mm256_mullo_epi64(x, y);
+#else
+        auto lo = _mm256_mul_epu32(x, y);
+        auto cross = _mm256_add_epi64(
+            _mm256_mul_epu32(_mm256_srli_epi64(x, 32), y),
+            _mm256_mul_epu32(x, _mm256_srli_epi64(y, 32)));
+        return _mm256_add_epi64(lo, _mm256_slli_epi64(cross, 32));
+#endif
+    }
+#endif
+
 	inline void doMod32(u64* vals, const libdivide::libdivide_u64_t* divider, const u64& modVal)
 	{
+        // Exact remainder for power-of-two bin counts, including one bin.
+        if (modVal && (modVal & (modVal - 1)) == 0)
+        {
+            const auto mask = modVal - 1;
+            for (unsigned i = 0; i < 32; i += 8)
+            {
+                vals[i+0] &= mask; vals[i+1] &= mask;
+                vals[i+2] &= mask; vals[i+3] &= mask;
+                vals[i+4] &= mask; vals[i+5] &= mask;
+                vals[i+6] &= mask; vals[i+7] &= mask;
+            }
+            return;
+        }
+
+#ifdef ENABLE_SSE
+        const auto modulus = _mm256_set1_epi64x(modVal);
+        for (unsigned i = 0; i < 32; i += 16)
+        {
+            auto a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(vals+i));
+            auto b = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(vals+i+4));
+            auto c = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(vals+i+8));
+            auto d = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(vals+i+12));
+            auto qa = my_libdivide_u64_do_vec256(a, divider);
+            auto qb = my_libdivide_u64_do_vec256(b, divider);
+            auto qc = my_libdivide_u64_do_vec256(c, divider);
+            auto qd = my_libdivide_u64_do_vec256(d, divider);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(vals+i), _mm256_sub_epi64(a, paxosMullo64(qa, modulus)));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(vals+i+4), _mm256_sub_epi64(b, paxosMullo64(qb, modulus)));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(vals+i+8), _mm256_sub_epi64(c, paxosMullo64(qc, modulus)));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(vals+i+12), _mm256_sub_epi64(d, paxosMullo64(qd, modulus)));
+        }
+#else
+
 
 
 
@@ -333,6 +382,7 @@ namespace volePSI
 			vals[i + 30] -= temp64h[2] * modVal;
 			vals[i + 31] -= temp64h[3] * modVal;
 		}
+#endif
 	}
 
 	//inline void doMod32(u64* vals, const libdivide::libdivide_u64_branchfree_t* divider, const u64& modVal)
@@ -658,10 +708,13 @@ namespace volePSI
 
 		if (mWeight == 3)
 		{
-			u32* rr = (u32*)&hash;
-			auto rr0 = *(u64*)(&rr[0]);
-			auto rr1 = *(u64*)(&rr[1]);
-			auto rr2 = *(u64*)(&rr[2]);
+            // The middle window starts four bytes into the hash. memcpy
+            // expresses the unaligned load without violating alignment/aliasing.
+            const auto* bytes = reinterpret_cast<const u8*>(&hash);
+            u64 rr0, rr1, rr2;
+            std::memcpy(&rr0, bytes, 8);
+            std::memcpy(&rr1, bytes+4, 8);
+            std::memcpy(&rr2, bytes+8, 8);
 			row[0] = (IdxType)(rr0 % mSparseSize);
 			row[1] = (IdxType)(rr1 % (mSparseSize - 1));
 			row[2] = (IdxType)(rr2 % (mSparseSize - 2));
@@ -774,14 +827,16 @@ namespace volePSI
 		{
 			mAllocation = {};
 			mAllocation.reset(new u8[size]);
+            mAllocationSize = size;
 		}
 
 		auto iter = mAllocation.get();
 
+        // Lay out decreasing alignments; odd row counts must not misalign spans.
 		mDense = initSpan<block>(iter, mNumItems);
+        mCols = initSpan<span<IdxType>>(iter, mSparseSize);
 		mRows = initMV<IdxType>(iter, mNumItems, mWeight);
 		mColBacking = initSpan<IdxType>(iter, mNumItems * mWeight);
-		mCols = initSpan<span<IdxType>>(iter, mSparseSize);
 		assert(iter == mAllocation.get() + size);
 	}
 
@@ -1142,19 +1197,34 @@ namespace volePSI
 			mWeightSets.init(colWeights);
 		}
 
+        // The XOR of live row indices gives the remaining row immediately
+        // when a column reaches weight one; avoid scanning its stale adjacency.
+        std::vector<IdxType> liveRows(mSparseSize);
+        for (u64 r=0; r<mNumItems; ++r)
+            for (auto c : mRows[r]) liveRows[c] ^= static_cast<IdxType>(r);
+
 		std::vector<u8> rowSet(mNumItems);
 		while (mWeightSets.mWeightSets.size() > 1)
 		{
 			auto& col = mWeightSets.getMinWeightNode();
 
+            const auto weight = col.mWeight;
 			mWeightSets.popNode(col);
 			col.mWeight = 0;
 			auto colIdx = mWeightSets.idxOf(col);
 
 			bool first = true;
 
+            auto rowIndices = mCols[colIdx];
+            IdxType singleton;
+            if (weight == 1)
+            {
+                singleton = liveRows[colIdx];
+                rowIndices = span<IdxType>(&singleton, 1);
+            }
+
 			// iterate over all the rows in the next column
-			for (auto rowIdx : mCols[colIdx])
+			for (auto rowIdx : rowIndices)
 			{
 				// check if this row has already been set.
 				if (rowSet[rowIdx] == 0)
@@ -1174,6 +1244,7 @@ namespace volePSI
 
 							// decrement the weight.
 							mWeightSets.popNode(node);
+                            liveRows[colIdx2] ^= rowIdx;
 							--node.mWeight;
 							mWeightSets.pushNode(node);
 
@@ -1691,6 +1762,35 @@ namespace volePSI
 				helper.randomize(p2[i], *prng);
 		}
 
+        if constexpr (std::is_same_v<Helper, typename PxVector<block>::Helper>)
+        {
+            const bool doDense = g || prng;
+            for (u64 k=0; k<mainRows.size(); k+=8)
+            {
+                const auto count = std::min<u64>(8, mainRows.size()-k);
+                std::array<block,8> dense, contribution;
+                if (doDense)
+                {
+                    for (u64 j=0; j<count; ++j) dense[j] = mDense[mainRows[mainRows.size()-1-k-j]];
+                    for (u64 j=count; j<8; ++j) dense[j] = oc::ZeroBlock;
+                    details::paxosDenseGF128Eight(dense.data(), p2[0], mDenseSize, contribution.data());
+                }
+                // Preserve triangular backfill order and PRNG consumption.
+                for (u64 j=0; j<count; ++j)
+                {
+                    auto pos = mainRows.size()-1-k-j;
+                    auto rowIdx = mainRows[pos];
+                    auto row = mRows[rowIdx];
+                    block y = *X[rowIdx];
+                    if (mWeight == 3) y ^= *P[row[0]] ^ *P[row[1]] ^ *P[row[2]];
+                    else for (u64 c=0; c<mWeight; ++c) y ^= *P[row[c]];
+                    if (doDense) y ^= contribution[j];
+                    *P[mainCols[pos]] = y;
+                }
+            }
+            return;
+        }
+
 		auto outColIter = mainCols.rbegin();
 		auto rowIter = mainRows.rbegin();
 		bool doDense = g || prng;
@@ -1790,6 +1890,30 @@ namespace volePSI
 		Vec& p_,
 		Helper& h)
 	{
+        if constexpr (std::is_same_v<Helper, typename PxVector<block>::Helper>)
+        {
+            if (mDt == DenseType::GF128)
+            {
+                const auto* table = p_[0];
+                for (unsigned i=0; i<32; i+=8)
+                {
+                    details::paxosDenseGF128Eight(dense_+i, table+mSparseSize, mDenseSize, values_+i);
+                    if (mWeight == 3)
+                    {
+                        for (unsigned j=0; j<8; ++j)
+                        {
+                            const auto* r = rows_+(i+j)*3;
+                            values_[i+j] ^= table[r[0]] ^ table[r[1]] ^ table[r[2]];
+                        }
+                    }
+                    else for (u64 k=0; k<mWeight; ++k)
+                        for (unsigned j=0; j<8; ++j)
+                            values_[i+j] ^= table[rows_[(i+j)*mWeight+k]];
+                }
+                return;
+            }
+        }
+
 		//{
 		//	auto r = rows_;
 		//	auto d = dense_;
@@ -2250,6 +2374,12 @@ namespace volePSI
 
 		if (mDt == DenseType::GF128)
 		{
+            if constexpr (std::is_same_v<Helper, typename PxVector<block>::Helper>)
+            {
+                *values ^= details::paxosDenseGF128(*dense, p[mSparseSize], mDenseSize);
+                return;
+            }
+
 			block x = *dense;
 			h.multAdd(values, p[mSparseSize], x);
 
@@ -2737,20 +2867,6 @@ namespace volePSI
 		// keeps track of the size of each bin for each thread. Additional spaces to prevent false sharing
 		Matrix<u64> thrdBinSizes(numThreads, mNumBins);
 
-		// keeps track of input index of each item in each bin,thread.
-		std::unique_ptr<u64[]> inputMapping(new u64[totalNumBins * perThrdMaxBinSize]);
-
-		// for the given thread, bin, return the list which map the bin 
-		// value back to the input value.
-		auto getInputMapping = [&](u64 thrdIdx, u64 binIdx)
-		{
-			auto binBegin = combinedMaxBinSize * binIdx;
-			auto thrdBegin = perThrdMaxBinSize * thrdIdx;
-			span<u64> mapping(inputMapping.get() + binBegin + thrdBegin, perThrdMaxBinSize);
-			assert(inputMapping.get() + totalNumBins * perThrdMaxBinSize >= mapping.data() + mapping.size());
-			return mapping;
-		};
-
 		auto valBacking = h.newVec(totalNumBins * perThrdMaxBinSize);
 
 		// get the values mapped to the given bin by the given thread.
@@ -2783,8 +2899,18 @@ namespace volePSI
 		std::promise<void> hashingDoneProm;
 		auto hashingDoneFu = hashingDoneProm.get_future().share();
 
+        // PRNG mutates its buffer and counters. Give each parallel worker an
+        // independently seeded stream; retain the exact single-thread stream.
+        std::vector<PRNG> workerPrngs;
+        if (prng && numThreads > 1)
+        {
+            workerPrngs.resize(numThreads);
+            for (auto& rng : workerPrngs) rng.SetSeed(prng->get<block>());
+        }
+
 		auto processBins = [&](u64 thrdIdx, bool& countedDone)
 		{
+            auto binPrng = workerPrngs.empty() ? prng : &workerPrngs[thrdIdx];
 			auto begin = (inputs_.size() * thrdIdx) / numThreads;
 			auto end = (inputs_.size() * (thrdIdx + 1)) / numThreads;
 			auto inputs = inputs_.subspan(begin, end - begin);
@@ -2793,7 +2919,7 @@ namespace volePSI
 			// hash all the inputs in my range [begin, end) into their bin.
 			// Each thread will have its own set of bins. ie a total of numThreads * numBins
 			// bins in total. These bin will need to be merged. Each thread will also
-			// get its own reverse mapping. 
+			// keep its own bin counters.
 			{
 				auto binSizes = thrdBinSizes[thrdIdx];
 				//auto hashes = span<block>(hashes_.data() + begin, end - begin);
@@ -2827,7 +2953,6 @@ namespace volePSI
 						if (binSizes[binIdx] >= perThrdMaxBinSize)
 							throw std::runtime_error("Baxos per-thread bin overflow" LOCATION);
 						auto bs = binSizes[binIdx]++;
-						getInputMapping(thrdIdx, binIdx)[bs] = inIdx;
 						h.assign(getValues(thrdIdx, binIdx)[bs], vals_[inIdx]);
 						getHashes(thrdIdx, binIdx)[bs] = hashes[k];
 					}
@@ -2842,9 +2967,6 @@ namespace volePSI
 						throw std::runtime_error("Baxos per-thread bin overflow" LOCATION);
 					auto bs = binSizes[binIdx]++;
 
-					if (inIdx == 9355778)
-						std::cout << "in " << inIdx << " -> bin " << binIdx << " @ " << bs << std::endl;
-					getInputMapping(thrdIdx, binIdx)[bs] = inIdx;
 					h.assign(getValues(thrdIdx, binIdx)[bs], vals_[inIdx]);
 					getHashes(thrdIdx, binIdx)[bs] = hashes[k];
 				}
@@ -2892,10 +3014,11 @@ namespace volePSI
 
 				auto iter = allocation.get();
 				//span<block> hashes = initSpan<block>(iter, binSize);
+                // Put pointer-aligned spans ahead of the narrower index arrays.
+                span<span<IdxType>> cols = initSpan<span<IdxType>>(iter, mPaxosParam.mSparseSize);
 				MatrixView<IdxType> rows = initMV<IdxType>(iter, binSize, mWeight);
 				span<IdxType> colBacking = initSpan<IdxType>(iter, binSize * mWeight);
 				span<IdxType> colWeights = initSpan<IdxType>(iter, mPaxosParam.mSparseSize);
-				span<span<IdxType>> cols = initSpan<span<IdxType>>(iter, mPaxosParam.mSparseSize);
 
 				if (iter > allocation.get() + allocSize)
 					throw RTE_LOC;
@@ -2986,7 +3109,7 @@ namespace volePSI
 				}
 
 				paxos.setInput(rows, hashes, cols, colBacking, colWeights);
-				paxos.encode(values, output, h, prng);
+				paxos.encode(values, output, h, binPrng);
 
 			}
 		};

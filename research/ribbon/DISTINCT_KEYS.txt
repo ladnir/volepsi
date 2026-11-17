@@ -1,0 +1,175 @@
+AES labels with an excluded Baxos seed (2026-11-16)
+
+Implementation decision
+
+Keep H(x) = AES_k(x) xor x, where k = cryptoTools::mAesFixedKey.getKey().
+For malicious Baxos sessions, the sender rejects the received seed s=k.
+The check precedes VOLE startup; rejection closes the socket and throws.
+An honest receiver resamples that seed. The late salt opening is retained.
+Labels, table dimensions, VOLE count and successful-session message sizes do
+not change. The BLAKE2 alternative is archived under blake2-reference and is
+not compiled into volePSI. This decision supersedes its deployment proposal.
+
+For Baxos, the first GF128 dense coefficient is d_s(x)=AES_s(x) xor x.
+Other dense coefficients are powers of d_s(x). Sparse positions and binning
+also depend on AES_s, not AES_k, when s differs from k. Setting the first
+dense cell of each bin to one and all other cells to zero therefore gives
+Decode_s(P,x)=H(x) for all x when s=k. Rejecting that seed blocks this witness.
+
+What can be established for distinct keys
+
+The following is a new counting argument for this implementation's Baxos
+decoder. It is not a theorem about concrete AES or the complete OPRF protocol.
+
+Let F=GF(2^128) and N=|F|. Identify F with the 128-bit AES block domain.
+In the ideal-cipher model, each key j indexes an independent random permutation
+pi_j of F. Fix the public label key k and define H(x)=pi_k(x)+x. Addition is XOR.
+For each admissible seed s!=k, let D_s(P,x) denote Baxos decoding of a table
+P in F^m, with fixed public dimensions. The decoder depends on pi_s and on
+deterministic arithmetic. In particular, it does not depend on pi_k.
+
+Define the effective set of a seed/table pair by
+  X(s,P) = {x in F : D_s(P,x)=pi_k(x)+x}.
+For any integer 1<=t<=N, the probability over the ideal cipher satisfies
+  Pr[there exist s!=k and P in F^m with |X(s,P)|>=t]
+      <= min(1, (N-1)*N^m / t!).
+The statement quantifies over all tables and seeds, including choices made
+after arbitrary cipher queries, inverse queries, or even complete disclosure.
+It is an information-theoretic bound on effective-set size in this model.
+
+Proof
+
+First fix all permutations pi_j for j!=k. The remaining pi_k is a uniform
+random permutation independent of these fixed permutations. Fix s!=k, P,
+and a set T of t distinct inputs. Every x in T is a match exactly when
+  pi_k(x) = x + D_s(P,x).
+The right-hand sides are now fixed. If two right-hand sides coincide, the
+probability is zero, since a permutation cannot map distinct inputs to the
+same output. Otherwise the probability is 1/(N)_t, where
+  (N)_t = N*(N-1)*...*(N-t+1).
+There are binom(N,t) possible T. Thus the union bound for this s,P is
+  binom(N,t)/(N)_t = 1/t!.
+There are N^m tables and N-1 admissible seeds. Union-bound over them, then
+average over the previously fixed permutations. This proves the statement.
+The union covers adaptive seed/table choices without conditioning on the
+adversary's final choice. No permutation-to-random-function switch is used.
+
+Concrete consequence
+
+To bound failure by 2^-128, it suffices that
+  log2(t!) >= 128*m + 256.
+We upper-bound N-1 by N here. The certified cap is t-1, not t.
+verify_distinct_key_bound.py computes a conservative integer cap using
+  ln(t!) >= t*ln(t)-t+1
+and 80-digit arithmetic. The inequality follows by integrating the increasing
+function ln(x) over [1,t]. The numerical bound includes a further full bit of
+slack; the reported cap is not the tightest integer obtainable from t!.
+
+For the existing Baxos geometry at n=2^20, m=1,411,712, the script gives
+a cap of 8,382,677 = 7.994344n, with log2 failure upper bound -131.3057.
+Thus 8n is a convenient conservative rounded cap for this geometry.
+This is an upper bound, not an attack reaching that size or an exact-n claim.
+The old strong-extraction conjecture n'<=m is not needed for this bound.
+
+Why the earlier query-dependent ROM table is not automatically applicable
+
+AES_k(x)+x is a permutation followed by input XOR, not an independent random
+function. Distinct AES keys isolate pi_k from the Baxos row permutation, but
+they do not turn pi_k into a random function. For forward-only pi_k access
+with at most q<N distinct queries, the same fixed-table proof can bound each
+fresh match by 1/(N-q+1), giving
+  (N-1)*N^m * binom(q,t)/(N-q+1)^t.
+This restricted statement does not cover arbitrary inverse queries to AES_k.
+Concrete public-key AES supports those queries, so we do not use it for the
+implementation's security claim or reuse the earlier q=2^64/2^96 cap table.
+The full-domain factorial bound above does include inverse access.
+
+This distinction can matter for a generic decoder: if D(P,x)=x+c, one inverse
+query pi_k^-1(c) gives a match. That is not a demonstrated Baxos construction;
+it explains why a forward-query RO proof must not silently cover inverse access.
+Likewise, a birthday switching loss is unsuitable for the earlier very large
+query budgets. The factorial proof avoids that loss entirely.
+
+Remaining assumptions and protocol obligations
+
+Ordinary secret-key PRP security of AES does not imply this ideal-cipher model
+for a public fixed key and adversarially chosen row keys. For example, a cipher
+family modified to be identity at one designated public key can retain random
+secret-key PRP security up to a 1/N loss, yet its labels at that key are all zero.
+This example distinguishes assumptions; it is not an attack on AES.
+
+The result bounds |X(s,P)|. A full efficient extraction/simulation proof must
+still account for the adversary's observable forward/inverse queries, inputs
+not previously queried, VOLE soundness, delta guessing, commitment binding,
+and the final AES-based output hash. The final output hash also uses AES with
+derived keys. Its joint analysis is not supplied by this counting lemma.
+Keeping the late salt opening preserves the earlier input-commitment ordering;
+the seed exclusion itself does not settle the salt-removal question.
+
+Ribbon extension (2026-11-17)
+
+Ribbon derives one start key and ceil(width/128) coefficient keys through
+PRNG(seed). The sender now rejects seed=k and rejects any seed for which one
+of these derived keys equals k. The honest receiver resamples such a seed.
+The check runs before VOLE. It uses the same PRNG sequence as Ribbon<W>'s
+constructor. Equality is extraordinarily unlikely for an honest random seed,
+but the check is required against a receiver that chooses its seed.
+
+For an admissible Ribbon seed, the derivation uses pi_s with s!=k. Every
+actual row AES key also differs from k. Thus after fixing the entire
+ideal-cipher family except pi_k, the Ribbon row function is fixed. The same
+factorial proof above applies with Ribbon's m=columns. The test checks the
+seed rule for widths selected at three sizes, while the existing Ribbon
+protocol tests cover normal sessions. This is an ideal-cipher statement.
+It does not establish a concrete-AES related-key theorem, the full OPRF
+simulation, or a bound as tight as the old m-sized conjecture. No equivalent
+universal-table attack on Ribbon is asserted.
+
+Relation to the papers
+
+The revised VOLE-PSI paper separates a generic random-oracle extraction bound
+from Conjecture 2.1 asserting a stronger m-sized effective set (pp.11-12).
+Han, Kim, Lee and Son show overfitting attacks against earlier claims and
+discuss revised parameters and query budgets (sections 4-6). Seed exclusion
+does not eliminate their overfitting phenomenon or prove that stronger claim.
+The factorial lemma above is our separate ideal-cipher argument, not a result
+attributed to either paper.
+  https://eprint.iacr.org/2021/266.pdf
+  https://eprint.iacr.org/2024/1989.pdf
+
+Reproduction
+
+RsOprf_seed_rejection_test constructs the universal table, runs a malicious
+receiver with real VOLE, and checks the sender rejects before generating VOLE.
+It covers one/multiple bins and both VOLE round modes. A neighboring seed
+completes normally, but the same table fails to recover the probed outputs.
+The mutation driver removes only the sender's seed check. The test then
+verifies 2,003 matching OPRF outputs after declaring 257 inputs, before failing
+with an explicit attack diagnostic. This is an end-to-end OPRF regression,
+not just a test that two standalone hashes differ.
+
+Validation and performance
+
+65/65 native tests pass with the exclusion enabled. The targeted ASan+UBSan
+suite passes the seed rejection, salt ordering, malicious OPRF and Ribbon
+protocol tests. The sanitizer build retains the previously documented private
+macoro/coproto fixes and the libOTe McRosRoy coroutine fix. It is not a claim
+that unpatched dependency releases pass these checks.
+
+The mutation reproduces the extra evaluations and fails with the expected
+diagnostic. Restoring the seed check passes all 65 tests again. Restoring the
+old salt-opening order still fails its independent withholding-receiver test.
+
+Sequential Peach timings, n=2^20, ssp=40, malicious mode, both parties on CPU 2,
+eight trials with trial zero excluded, median combined wall time:
+  Baxos: 490.597 ms (previous BLAKE2 implementation: 535.769 ms).
+  Ribbon: 455.286 ms (previous BLAKE2 implementation: 498.323 ms).
+The old AES baseline was 493.163/457.069 ms; these runs are near that baseline.
+Successful-session communication is identical: receiver 22,877,901 bytes for
+Baxos or 21,262,038 for Ribbon; sender 16,864,109 bytes for either backend.
+No new native ARM run was performed. AES uses the existing cryptoTools kernel.
+
+Logs and manifests: results/peach-20261116-distinct-key. Source bytes match the
+restored regression manifest. The mutation driver normalizes RsOprf.cpp line
+endings; the pre-mutation benchmark/sanitizer source differs only in CRLF/LF.
+No PR was updated by this validation run.

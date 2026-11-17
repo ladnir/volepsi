@@ -7,6 +7,7 @@
 
 set(SRCS
 	"Paxos_Tests.cpp"
+    "Ribbon_Tests.cpp"
 	"RsOprf_Tests.cpp"
 	"RsPsi_Tests.cpp"
 	"UnitTests.cpp"

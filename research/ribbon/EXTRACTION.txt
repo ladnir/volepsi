@@ -1,0 +1,225 @@
+OKVS extraction bounds and implementation hardening (2026-11-15)
+
+Current decision (2026-11-16)
+
+The user selected AES labels with sender-side rejection of s=k for malicious
+Baxos sessions. See DISTINCT_KEYS.txt for the current implementation, the
+end-to-end attack regression, and an ideal-cipher extraction bound. The
+BLAKE2 implementation below is historical and is no longer compiled. The
+independent-random-oracle bounds below remain valid for that mathematical
+model; they must not be silently assigned to the restored AES implementation.
+No communication increase or wider labels were approved or implemented.
+
+Historical status: independent-label exploration
+
+No wider-label protocol has been implemented or selected. The executable
+extraction_bounds.py reports a conservative trade-off for discussion. The
+current hardening retains 128-bit labels and the same table/VOLE dimensions.
+It changes malicious OPRF labels to a domain of cryptoTools RandomOracle,
+independent of receiver-selected AES row hashing. It also defers the sender's
+coin-flip opening until the complete correction table has arrived.
+These changes apply to both Baxos and Ribbon. Semi-honest hashing is unchanged.
+Both endpoints must upgrade together for malicious sessions; the label change
+is not compatible with the previous malicious protocol. There is no negotiation.
+
+Why the original equal-key implementation fails
+
+Previously H(x) = AES_k(x) xor x for cryptoTools' public fixed key k. The
+receiver chooses the Baxos seed s, and the first GF128 dense coefficient is
+AES_s(x) xor x. The receiver can set s=k, set the first dense cell of every
+bin to the field identity, and set all other cells to zero. Then Decode(P,x)
+= H(x) for every x, regardless of the declared set size. This is an algebraic
+identity, not a generalized-birthday attack. The regression reproduces it
+for one and many bins, then checks the independently hashed labels differ.
+Replacing k with another public AES key, without a sender-side seed exclusion,
+would leave the same attack available. Rejecting s=k is the current remedy;
+the earlier BLAKE2 replacement was sufficient but not shown necessary.
+The test establishes the identity and its removal; it is not a proof of the
+random-oracle model for Blake2 or AES. No equivalent Ribbon identity is claimed.
+
+The old implementation also opened the final salt before receiving P xor C.
+Extraction in the paper precedes that opening. The salt-order regression uses
+a withholding receiver and checks that no opening arrives even when only the
+last byte of the correction table is withheld, for both backends and both
+round configurations.
+
+Game and bound
+
+Fix the declared set size n, the public OKVS geometry with m cells, and a
+deterministic decoder for each s-bit seed. Let each cell contain L bits.
+The decoder and row functions are independent of the label random oracle
+H: {0,1}^128 -> {0,1}^L. The adversary may choose the seed and table adaptively
+after at most q distinct H queries. All preprocessing queries count toward q.
+Define X_eff as the queried keys x for which Decode(seed,P,x)=H(x).
+
+For any positive integer t <= q,
+
+  Pr[|X_eff| >= t] <= min(1, 2^(s+Lm) binom(q,t) 2^(-Lt)).
+
+To justify the bound, fix the complete row functions, a seed and a table.
+At each fresh label query the required decoding value is already determined,
+and H's answer is independent and uniform. For any t query indices the
+probability of t matches is 2^(-Lt), even with adaptive query selection.
+Union-bound over index subsets, over all 2^(Lm) tables, and over 2^s seeds.
+This covers adversarial tables, seed grinding, and arbitrary row dependencies.
+It does not require random-band rank assumptions or independent dense columns.
+The final union includes seeds chosen as a function of oracle answers.
+
+The script uses binom(q,t) <= (e*q/t)^t, yielding
+
+  log2 Pr <= s+Lm+t*(log2(q)-L-log2(t)+log2(e)).
+
+It finds the first t with this upper bound <= -128 and reports t-1 as the cap.
+Arithmetic uses 80 decimal digits, and small exact binomial examples verify
+the relaxation. This is numerical evaluation of an analytic inequality, not
+an exhaustive cryptographic security test. A simple independent certificate:
+L=256, s=128, q<=2^128, and t=2m+2 give exponent <= -128 even using binom(q,t)
+<= q^t. Thus the cap 2m+1 is available for every positive m in this model.
+
+Concrete trade-off
+
+For n=2^20 and the current ssp=40 geometries:
+  Ribbon: m=1,310,720 = 1.25n.
+  Baxos:  m=1,411,712 = 1.3463134765625n.
+Use s=128 and q<=2^128. The following cap/n values are rounded UP; the script
+returns integer caps. L>128 rows describe candidate wider-value constructions,
+not current protocol implementations or measured performance.
+
+  L bits   payload/VOLE blocks per cell   Ribbon cap/n   Baxos cap/n
+   128                 1                     7.458          7.995
+   256                 2                     2.167          2.333
+   384                 3                     1.744          1.877
+   512                 4                     1.588          1.710
+   640                 5                     1.507          1.622
+  1024                 8                     1.399          1.507
+  1280                10                     1.367          1.472
+
+For smaller query budgets with L=128, the same calculation gives:
+  log2(q)=64: Ribbon <1.917n, Baxos <2.062n.
+  log2(q)=96: Ribbon <3.067n, Baxos <3.297n.
+  log2(q)=100: Ribbon <3.314n, Baxos <3.562n.
+
+These are conservative upper bounds, not demonstrated attack costs. Increasing
+L reduces generic extraction slack but cannot take this argument below m.
+With the current geometries that limiting floor is 1.25n or 1.3464n. Exact-n
+enforcement needs a different argument or additional protocol machinery.
+
+A query budget of 2^128 and extraction failure 2^-128 do NOT mean the entire
+128-bit protocol has that failure probability at that budget. VOLE, delta
+guessing, final-output hashing, commitment binding, and computational hash
+instantiation have their own advantages. This document only bounds overfitting.
+
+For a wider-value implementation, the label must actually contain L independent
+RO bits, the table must encode all of them, and final OPRF evaluation must bind
+all decoded lanes. Expanding a 128-bit digest or discarding lanes before the
+final hash does not establish this game. Independent lanes can share elimination
+and row generation. Payload/VOLE multipliers above are not wall-time multipliers.
+The full protocol reduction and its final combiner still require review.
+
+The known attacks and the generic upper bound leave a gap. Historical PaXoS,
+RR22 and RB-OKVS attack estimates must not be assigned to this implementation
+without checking its binning, dense powers, band widths and hash model. Merely
+raising rank-failure security or the band width does not prove a tighter cap.
+
+Sources
+
+Rindal and Schoppmann, VOLE-PSI, revised 2024-08-08, p.11 equation (1), p.12
+Conjecture 2.1: https://eprint.iacr.org/2021/266
+Han, Kim, Lee and Son, Revisiting OKVS-based OPRF and PSI, ASIACRYPT 2024,
+especially section 5: https://eprint.iacr.org/2024/1989
+Our bound adds an explicit union over receiver-selected 128-bit seeds.
+
+Next decision: retain 128-bit independent labels with a documented loose cap,
+or prototype L=256 as the first wider-value point and measure its end-to-end
+cost. Do not promise an exact-n guarantee for either option.
+
+Validation and cost of the current reference patch
+
+65/65 native tests pass. Reintroducing the old salt order makes its dedicated
+test fail; restoring the old label function makes the domain test fail.
+The final source hashes match the files used for native timings and sanitizers.
+
+Sequential Peach runs, n=2^20, ssp=40, malicious mode, both parties on CPU 2,
+eight trials each with trial zero excluded; median combined wall time:
+  Baxos: 493.163 ms before, 790.597 ms after.
+  Ribbon: 457.069 ms before, 766.027 ms after.
+Communication is identical before/after. These are combined two-party times,
+not per-party latencies. The per-key Blake2 label implementation is a costly
+correctness reference and needs a separate batching/performance pass. No
+wider-value candidate was benchmarked; L is still 128.
+
+The ASan+UBSan label-domain test passes, but the salt-order test then crashes
+inside McRosRoy base OT at McRosRoy.h:267 (Point::mulGenerator). The root cause
+has not been established. This is not a successful sanitizer validation and
+the patch is not declared merge-ready. The existing macoro/coproto private
+include fixes from integration_peach.py were active, with no checks disabled.
+
+Raw logs, mutation failures, source hashes, bounds and timings are under
+results/peach-20261115-extraction. The original diagnostic is
+hardening-sanitize.txt. No PR has been updated with this reference patch.
+Next implementation work: resolve the sanitizer failure and batch a standard
+independent label hash before choosing whether wider labels are worthwhile.
+
+Hash optimization and alignment fix (completed 2026-11-16)
+
+This section supersedes the reference patch's performance and sanitizer status
+above. Label width remains 128 bits. The user has not approved any increase in
+communication: message sizes, VOLE count and table geometry are unchanged.
+Both endpoints must use the independent label function introduced above.
+
+RsOprfHash.cpp specializes standard BLAKE2b-128 for the fixed domain and 16-byte
+key. It retains all twelve rounds and exactly matches the scalar RandomOracle
+reference. It batches independent hashes in eight AVX-512, four AVX2, or two
+ARM NEON lanes, with the scalar reference as the portable fallback. There is
+no heap allocation or runtime dispatch in the kernel. A non-inlined ordinary
+function keeps aligned SIMD scratch outside the OPRF coroutine frame.
+
+Sequential Peach runs use the same n=2^20, ssp=40, malicious mode, CPU 2 and
+eight-trial protocol as the reference measurements above. Trial zero is
+excluded. Median combined wall time for both parties:
+                 old AES       scalar independent hash    batched hash
+  Baxos          493.163 ms          790.597 ms             535.769 ms
+  Ribbon         457.069 ms          766.027 ms             498.323 ms
+The batched implementation is 32.2%/34.9% faster than the scalar hardening
+reference. It remains 8.6%/9.0% slower than the old unsafe AES label baseline.
+These are combined two-party measurements, not per-party latency estimates.
+Sent bytes match all three implementations exactly:
+  Baxos receiver 22,877,901; Ribbon receiver 21,262,038; sender 16,864,109.
+No wider-label candidate was implemented or benchmarked.
+
+The McRosRoy crash was an aligned AVX-512 load from a point temporary whose
+address was only 32-byte aligned in a coroutine. GDB captured the faulting
+vmovdqa64 instruction. The libOTe fix moves receiver point preparation, point
+decoding/multiplication, sender generator encoding and sender derivation into
+non-inlined ordinary helpers. PRNG order, wire encoding and batched arithmetic
+are preserved; owned byte/scalar vectors survive coroutine suspensions.
+
+Validation: 66/66 native tests; targeted ASan+UBSan label, salt-order, malicious
+OPRF and Ribbon protocol tests; AVX2 and portable hash/Ribbon fallback checks.
+Both MRR POPF variants additionally pass ASan+UBSan for thirteen sizes from
+zero through 128, mismatched choice/output spans and malformed point messages.
+The sanitizer run still needs the private macoro/coproto include fixes described
+in INTEGRATION.txt. Checks were not disabled. Those dependency fixes have not
+yet been carried into their repositories; this is not a clean-dependency CI
+claim. The timed native builds use the MRR fix but not those two overlays.
+
+The production AVX2 and NEON kernels also match 20,003 independent Python
+hashlib vectors, tails, guard cells and in-place calls. NEON ran under QEMU,
+not on a Mac. Fallback checks use native x86 dependency libraries and are not
+whole-stack portability claims. Logs, build commands, source hashes and the
+MRR diagnostic are in results/peach-20261115-hash-opt. Its summary distinguishes
+the old AES baseline, scalar hardening reference and final batched hash.
+
+Salt decision: keep the existing salt and open it only after receiving the
+entire correction table. The salt does not prevent overfitting. Its late
+opening prevents a receiver from inspecting would-be OPRF outputs and choosing
+its batch input set based on those outputs. The simulator in VOLE-PSI's revised
+proof (eprint 2021/266, p.17) extracts the input set and obtains ideal outputs
+before sampling/opening w and programming the final oracle. Removing the salt
+needs a different argument, potentially for PSI specifically; the current
+batch OPRF proof does not justify that removal.
+
+Next: carry the dependency lifetime fixes into the existing PRs and review the
+full extraction reduction. Discuss a concrete communication/security tradeoff
+with the user before implementing any wider labels. No label-width decision
+or exact-n extraction claim follows from the optimization results.

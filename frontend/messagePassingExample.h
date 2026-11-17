@@ -151,6 +151,7 @@ void messagePassingExampleRun(oc::CLP& cmd)
             set[i] = oc::block(0, i);
 
         sender.setMultType(type);
+        sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
         sender.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
         if (verbose)
@@ -174,6 +175,7 @@ void messagePassingExampleRun(oc::CLP& cmd)
 
         volePSI::RsPsiReceiver recevier;
         recevier.setMultType(type);
+        recevier.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
         recevier.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
         if (verbose)
@@ -231,6 +233,7 @@ void messagePassingExampleBoth(oc::CLP& cmd)
         senderSet[i] = oc::block(0, i);
 
     sender.setMultType(type);
+    sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
     sender.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
     if (verbose)
@@ -249,6 +252,7 @@ void messagePassingExampleBoth(oc::CLP& cmd)
 
     volePSI::RsPsiReceiver recevier;
     recevier.setMultType(type);
+    recevier.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
     recevier.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
     if (verbose)
