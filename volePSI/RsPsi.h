@@ -48,6 +48,7 @@ namespace volePSI
     public:
 
         RsOprfSender mSender;
+        void setOkvsType(OkvsType type) { mSender.setOkvsType(type); }
         void setMultType(oc::MultType type) { mSender.setMultType(type); };
 
 
@@ -64,6 +65,7 @@ namespace volePSI
     {
     public:
         RsOprfReceiver mRecver;
+        void setOkvsType(OkvsType type) { mRecver.setOkvsType(type); }
         void setMultType(oc::MultType type) { mRecver.setMultType(type); };
 
         std::vector<u64> mIntersection;

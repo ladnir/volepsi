@@ -2152,3 +2152,119 @@ void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
 }
 
 
+
+void Paxos_dense_kernel_Test(const oc::CLP&)
+{
+    PRNG rng(oc::toBlock(0x13579));
+    std::array<block, 8> x, out;
+    std::array<block, 40> coefficients;
+    for (u64 count : {1, 2, 3, 7, 17, 40})
+    {
+        for (unsigned trial=0; trial<200; ++trial)
+        {
+            rng.get(x.data(), x.size());
+            rng.get(coefficients.data(), coefficients.size());
+            x[0] = oc::ZeroBlock;
+            x[1] = oc::toBlock(1);
+            details::paxosDenseGF128Eight(x.data(), coefficients.data(), count, out.data());
+            for (unsigned i=0; i<8; ++i)
+            {
+                block expected=oc::ZeroBlock, power=x[i];
+                for (u64 j=0; j<count; ++j)
+                {
+                    expected ^= coefficients[j].gf128Mul(power);
+                    power = power.gf128Mul(x[i]);
+                }
+                if (out[i] != expected || details::paxosDenseGF128(x[i], coefficients.data(), count) != expected)
+                    throw std::runtime_error("dense Horner evaluation differs from power sum");
+            }
+        }
+    }
+}
+
+void Paxos_mod32_Test(const oc::CLP&)
+{
+    PRNG rng(oc::toBlock(0x24680));
+    std::array<u64,32> input, values;
+    const std::array<u64,12> divisors{1,2,3,7,64,65521,0xffffffffULL,0x100000001ULL,
+        0x8000000000000000ULL,0x8000000000000001ULL,0xffffffffffffffc5ULL,0xffffffffffffffffULL};
+    for (unsigned trial=0; trial<1000; ++trial)
+    {
+        auto divisor=trial<divisors.size()?divisors[trial]:rng.get<u64>()|1;
+        auto divider=libdivide::libdivide_u64_gen(divisor);
+        rng.get(input.data(),input.size());
+        input[0]=0;input[1]=divisor-1;input[2]=divisor;input[3]=~u64(0);
+        values=input;
+        doMod32(values.data(),&divider,divisor);
+        for (unsigned i=0;i<32;++i)
+            if(values[i]!=input[i]%divisor) throw std::runtime_error("SIMD remainder mismatch");
+    }
+}
+
+void Baxos_dense_reference_Test(const oc::CLP&)
+{
+    PRNG rng(oc::toBlock(0xabcdef));
+    for (u64 ssp : {20,40,80}) for (u64 weight : {2,3,4,5})
+    {
+        constexpr u64 n=2051;
+        Baxos b;b.init(n,300,weight,ssp,PaxosParam::GF128,rng.get<block>());
+        std::vector<block> keys(n), values(n), table(b.size()), queries(545), out(545), expected(545);
+        rng.get(keys.data(),n);rng.get(values.data(),n);rng.get(queries.data(),queries.size());
+        std::copy_n(keys.data(),33,queries.data());
+        for (bool randomized : {false,true})
+        {
+            b.solve<block>(keys,values,table,randomized?&rng:nullptr,2);
+            PaxosHash<u32> hasher;hasher.init(b.mSeed,weight,b.mPaxosParam.mSparseSize);
+            oc::AES aes(b.mSeed);
+            std::array<u32,20> row;
+            for (u64 i=0;i<queries.size();++i)
+            {
+                auto hash=aes.hashBlock(queries[i]);
+                hasher.buildRow(hash,row.data());
+                auto p=table.data()+b.modNumBins(hash)*b.mPaxosParam.size();
+                block value=oc::ZeroBlock,power=hash;
+                for(u64 j=0;j<weight;++j) value^=p[row[j]];
+                for(u64 j=0;j<b.mPaxosParam.mDenseSize;++j)
+                {
+                    value^=power.gf128Mul(p[b.mPaxosParam.mSparseSize+j]);
+                    power=power.gf128Mul(hash);
+                }
+                expected[i]=value;
+                if(i<33 && value!=values[i]) throw std::runtime_error("scalar member mismatch");
+            }
+            for(u64 threads:{1,3}) for(u64 count:{0,1,7,8,31,32,33,545})
+            {
+                b.mAddToDecode=false;
+                b.decode<block>(span<const block>(queries).subspan(0,count),span<block>(out).subspan(0,count),table,threads);
+                for(u64 i=0;i<count;++i) if(out[i]!=expected[i]) throw std::runtime_error("batched reference mismatch");
+                b.mAddToDecode=true;
+                b.decode<block>(span<const block>(queries).subspan(0,count),span<block>(out).subspan(0,count),table,threads);
+                for(u64 i=0;i<count;++i) if(out[i]!=oc::ZeroBlock) throw std::runtime_error("add-to-decode mismatch");
+            }
+        }
+    }
+}
+
+void Baxos_randomized_parallel_determinism_Test(const oc::CLP&)
+{
+    PRNG input(oc::toBlock(987654));
+    std::vector<block> keys(8193), values(keys.size()), out(keys.size());
+    input.get(keys.data(),keys.size()); input.get(values.data(),values.size());
+    for (auto dt : {PaxosParam::GF128,PaxosParam::Binary}) for(u64 threads : {2,3})
+    {
+        Baxos b;b.init(keys.size(),512,3,40,dt,oc::ZeroBlock);
+        std::vector<block> reference(b.size()), result(b.size());
+        block next;
+        for (unsigned trial=0;trial<4;++trial)
+        {
+            PRNG rng(oc::toBlock(123456));
+            b.solve<block>(keys,values,result,&rng,threads);
+            auto after=rng.get<block>();
+            if (trial==0) {reference=result;next=after;}
+            else if(result!=reference || after!=next)
+                throw std::runtime_error("parallel randomized encoding depends on worker scheduling");
+            b.decode<block>(keys,out,result,threads);
+            if(out!=values) throw std::runtime_error("parallel randomized encode mismatch");
+        }
+    }
+}

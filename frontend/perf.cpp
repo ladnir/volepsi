@@ -385,8 +385,11 @@ void perfPSI(oc::CLP& cmd)
 	recv.init(n, n, 40, ZeroBlock, mal, nt);
 	send.init(n, n, 40, ZeroBlock, mal, nt);
 
-	recv.setMultType(type);
-	send.setMultType(type);
+    recv.setMultType(type);
+    send.setMultType(type);
+    auto okvs = parseOkvsType(cmd.getOr<std::string>("okvs", "baxos"));
+    recv.setOkvsType(okvs);
+    send.setOkvsType(okvs);
 
 	if (noCompress)
 	{

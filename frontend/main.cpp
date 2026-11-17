@@ -58,6 +58,7 @@ int main(int argc, char** argv)
             << "   -indexSet: output the index set of the intersection instead of the set element itself\n"
             << "   -noSort: do not require the output to be in the same order and the input (slightly faster).\n"
             << "   -malicious: run the protocol with malicious security\n"
+            << "   -okvs <baxos|ribbon>: select the same OKVS on both parties (default baxos).\n"
             << "   -ssp: Statistical Security parameter, default = 40.\n\n"
 
             << "   -ip <value>: IP address and port of the server = PSI receiver. (Default = localhost:1212)\n"

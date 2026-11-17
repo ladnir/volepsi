@@ -9,6 +9,7 @@
 
 #include "volePSI/Defines.h"
 #include "volePSI/Paxos.h"
+#include "volePSI/RibbonOkvs.h"
 #include "libOTe/Vole/Silent/SilentVoleSender.h"
 #include "libOTe/Vole/Silent/SilentVoleReceiver.h"
 
@@ -25,11 +26,17 @@ namespace volePSI
         span<block> mB;
         block mD;
         Baxos mPaxos;
+        RibbonOkvs mRibbon;
+        u64 okvsSize() { return mOkvsType == OkvsType::Ribbon ? mRibbon.size() : mPaxos.size(); }
         bool mMalicious = false;
         block mW;
         u64 mBinSize = 1 << 14;
         u64 mSsp = 40;
         bool mDebug = false;
+        // Both parties must select the same backend before starting a session.
+        // Ribbon is currently opt-in; Baxos retains its existing wire format.
+        OkvsType mOkvsType = OkvsType::Baxos;
+        void setOkvsType(OkvsType type) { mOkvsType = type; }
 
         void setMultType(oc::MultType type) { mVoleSender.mLpnMultType = type; };
 
@@ -58,6 +65,10 @@ namespace volePSI
         u64 mBinSize = 1 << 14;
         u64 mSsp = 40;
         bool mDebug = false;
+        // Both parties must select the same backend before starting a session.
+        // Ribbon is currently opt-in; Baxos retains its existing wire format.
+        OkvsType mOkvsType = OkvsType::Baxos;
+        void setOkvsType(OkvsType type) { mOkvsType = type; }
 
         void setMultType(oc::MultType type) { mVoleRecver.mLpnMultType = type; };
 

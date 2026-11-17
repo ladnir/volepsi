@@ -5,6 +5,8 @@ namespace volePSI
 	Proto RsOprfSender::send(u64 n, PRNG& prng, Socket& chl, u64 numThreads, bool reducedRounds)
 	{
 		auto ws = block{};
+		auto ribbonSeed = block{};
+		auto ribbonSuccess = u8{1};
 		auto hBuff = std::array<u8, 32> {};
 		auto ro = oc::RandomOracle(32);
 		auto pPtr = std::unique_ptr<block[]>{};
@@ -19,7 +21,10 @@ namespace volePSI
 		setTimePoint("RsOprfSender::send-begin");
 		ws = prng.get();
 
-		mPaxos.init(n, mBinSize, 3, mSsp, PaxosParam::GF128, oc::ZeroBlock);
+        if (mOkvsType == OkvsType::Ribbon)
+            mRibbon.init(n, mSsp, oc::ZeroBlock);
+        else
+            mPaxos.init(n, mBinSize, 3, mSsp, PaxosParam::GF128, oc::ZeroBlock);
 
 		mD = prng.get();
 
@@ -36,15 +41,39 @@ namespace volePSI
 
 		numThreads = std::max<u64>(1, numThreads);
 		//mVoleSender.mNumThreads = numThreads;
-		// a + b  = c * d
-		fork = chl.fork();
-		fu = genVole(prng, fork, reducedRounds)
-			| macoro::make_eager();
-
-		co_await(chl.recv(mPaxos.mSeed));
+        if (mOkvsType == OkvsType::Ribbon)
+        {
+            co_await chl.recv(ribbonSeed);
+            if (mMalicious && !mRibbon.labelKeyIndependent(ribbonSeed, oc::mAesFixedKey.getKey()))
+            {
+                co_await chl.close();
+                throw std::invalid_argument("Ribbon seed depends on the OPRF label AES key");
+            }
+            mRibbon.setSeed(ribbonSeed);
+        }
+        else
+        {
+            co_await(chl.recv(mPaxos.mSeed));
+            // With this seed, the first GF128 dense coefficient is H(x).
+            // A table with one identity cell per bin would encode every key.
+            if (mMalicious && mPaxos.mSeed == oc::mAesFixedKey.getKey())
+            {
+                co_await chl.close();
+                throw std::invalid_argument("Baxos seed equals the OPRF label AES key");
+            }
+        }
 		setTimePoint("RsOprfSender::recv-seed");
+		// Validate the seed before launching a child VOLE coroutine.
+		// a + b = c * d
+		fork = chl.fork();
+		fu = genVole(prng, fork, reducedRounds) | macoro::make_eager();
 		co_await(fu);
-		mB = mVoleSender.mB;
+        if (mOkvsType == OkvsType::Ribbon)
+        {
+            co_await chl.recv(ribbonSuccess);
+            if (ribbonSuccess != 1) throw std::runtime_error("Ribbon OKVS encoding failed");
+        }
+        mB = mVoleSender.mB;
 		setTimePoint("RsOprfSender::send-vole");
 
 
@@ -53,13 +82,12 @@ namespace volePSI
 		if (mMalicious)
 		{
 			co_await(chl.recv(mW));
-			co_await(chl.send(std::move(ws)));
 			mW = mW ^ ws;
 			setTimePoint("RsOprfSender::recv-mal");
 		}
 
-		pPtr.reset(new block[mPaxos.size()]);
-		pp = span<block>(pPtr.get(), mPaxos.size());
+		pPtr.reset(new block[okvsSize()]);
+		pp = span<block>(pPtr.get(), okvsSize());
 
 		setTimePoint("RsOprfSender::alloc ");
 
@@ -143,6 +171,10 @@ namespace volePSI
 
 			}
 		}
+		// Extraction fixes P from the complete correction before the receiver
+		// learns the final hash salt. Do not move this opening above recv(pp).
+		if (mMalicious)
+			co_await chl.send(std::move(ws));
 	}
 
 	block RsOprfSender::eval(block v)
@@ -155,7 +187,10 @@ namespace volePSI
 	{
 		setTimePoint("RsOprfSender::eval-begin");
 
-		mPaxos.decode<block>(val, output, mB, numThreads);
+        if (mOkvsType == OkvsType::Ribbon)
+            mRibbon.decode(val, output, mB, numThreads);
+        else
+            mPaxos.decode<block>(val, output, mB, numThreads);
 
 		setTimePoint("RsOprfSender::eval-decode");
 
@@ -247,10 +282,10 @@ namespace volePSI
 	Proto RsOprfSender::genVole(PRNG& prng, Socket& chl, bool reduceRounds)
 	{
 		if (reduceRounds)
-			mVoleSender.configure(mPaxos.size(), mVoleSender.mSecurityType,
+			mVoleSender.configure(okvsSize(), mVoleSender.mSecurityType,
 				mVoleSender.mLpnMultType, oc::SilentBaseType::Base);
 
-		return mVoleSender.silentSendInplace(mD, mPaxos.size(), prng, chl);
+		return mVoleSender.silentSendInplace(mD, okvsSize(), prng, chl);
 	}
 
 	struct UninitVec : span<block>
@@ -272,6 +307,9 @@ namespace volePSI
 		auto ws = block{};
 		auto Hws = std::array<u8, 32> {};
 		auto paxos = Baxos{};
+        auto ribbon = RibbonOkvs{};
+        auto tableSize = u64{};
+        auto ribbonSuccess = u8{1};
 		auto hPtr = std::unique_ptr<block[]>{};
 		auto h = span<block>{};
 		auto p = UninitVec{};
@@ -288,9 +326,30 @@ namespace volePSI
 		if (values.size() != outputs.size())
 			throw RTE_LOC;
 
-		hashingSeed = prng.get(), wr = prng.get();
+		hashingSeed = prng.get();
+        if (mMalicious)
+        {
+            if (mOkvsType == OkvsType::Baxos)
+                while (hashingSeed == oc::mAesFixedKey.getKey()) hashingSeed = prng.get();
+            else
+            {
+                ribbon.init(values.size(), mSsp, hashingSeed);
+                while (!ribbon.labelKeyIndependent(hashingSeed, oc::mAesFixedKey.getKey()))
+                    hashingSeed = prng.get();
+            }
+        }
+        wr = prng.get();
 		paxos.mDebug = mDebug;
-		paxos.init(values.size(), mBinSize, 3, mSsp, PaxosParam::GF128, hashingSeed);
+        if (mOkvsType == OkvsType::Ribbon)
+        {
+            ribbon.init(values.size(), mSsp, hashingSeed);
+            tableSize = ribbon.size();
+        }
+        else
+        {
+            paxos.init(values.size(), mBinSize, 3, mSsp, PaxosParam::GF128, hashingSeed);
+            tableSize = paxos.size();
+        }
 
 		co_await(chl.send(std::move(hashingSeed)));
 
@@ -304,7 +363,7 @@ namespace volePSI
 			mVoleRecver.setTimer(*mTimer);
 
 		fork = chl.fork();
-		fu = genVole(paxos.size(), prng, fork, reducedRounds)
+		fu = genVole(tableSize, prng, fork, reducedRounds)
 			| macoro::make_eager();
 
 
@@ -318,13 +377,24 @@ namespace volePSI
 		//auto pPtr = std::make_shared<std::vector<block>>(paxos.size());
 		//span<block> p = *pPtr;
 
-		p.resize(paxos.size());
+		p.resize(tableSize);
 
 		setTimePoint("RsOprfReceiver::receive-alloc");
 
-		paxos.solve<block>(values, h, p, nullptr, numThreads);
+        if (mOkvsType == OkvsType::Ribbon)
+            ribbonSuccess = ribbon.solve(values, h, p) ? 1 : 0;
+        else
+            paxos.solve<block>(values, h, p, nullptr, numThreads);
 		setTimePoint("RsOprfReceiver::receive-solve");
 		co_await(fu);
+
+        // Finish the in-flight VOLE on both parties, then report a one-shot
+        // rank failure before either party waits for the correction table.
+        if (mOkvsType == OkvsType::Ribbon)
+        {
+            co_await chl.send(ribbonSuccess);
+            if (!ribbonSuccess) throw std::runtime_error("Ribbon OKVS encoding failed");
+        }
 
 		// a + b  = c * d
 		a = mVoleRecver.mA;
@@ -421,7 +491,11 @@ namespace volePSI
 
 		}
 
-		paxos.decode<block>(values, outputs, a, numThreads);
+        setTimePoint("RsOprfReceiver::decode-begin");
+        if (mOkvsType == OkvsType::Ribbon)
+            ribbon.decode(values, outputs, a, numThreads);
+        else
+            paxos.decode<block>(values, outputs, a, numThreads);
 
 		setTimePoint("RsOprfReceiver::receive-decode");
 
