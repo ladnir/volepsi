@@ -139,9 +139,14 @@ namespace volePSI
             if(threads==1) { work(0); return; }
             std::vector<std::exception_ptr> errors(threads);
             auto guarded=[&](u64 i) { try {work(i);} catch(...) {errors[i]=std::current_exception();} };
-            std::vector<std::jthread> workers;
+            std::vector<std::thread> workers;
             workers.reserve(threads-1);
-            for(u64 i=1;i<threads;++i) workers.emplace_back(guarded,i);
+            try {
+                for(u64 i=1;i<threads;++i) workers.emplace_back(guarded,i);
+            } catch(...) {
+                for(auto& worker:workers) worker.join();
+                throw;
+            }
             guarded(0);
             for(auto& worker:workers) worker.join();
             for(auto error:errors) if(error) std::rethrow_exception(error);
