@@ -1,0 +1,162 @@
+Ribbon integration into volePSI (2026-11-15)
+
+Current hash decision (2026-11-16): AES labels are restored. Malicious Baxos
+rejects the seed equal to the fixed label AES key. See DISTINCT_KEYS.txt for
+the attack test and the scope of the ideal-cipher extraction argument. The
+BLAKE2 timings at the end of this file are historical. The sender also validates Ribbon's derived row keys before VOLE; see DISTINCT_KEYS.txt for the extended argument. Communication is unchanged.
+
+The implementation is selectable through RsOprfSender/Receiver and
+RsPsiSender/Receiver with setOkvsType(OkvsType::Ribbon). File PSI, the
+network/message-passing examples, and the PSI benchmark accept -okvs ribbon.
+Both parties must select the same backend and statistical parameter. There is
+no backend negotiation. Baxos remains the default during this exploration;
+its existing wire format is unchanged. ChosenBAA30 remains the VOLE encoder.
+
+The public RibbonOkvs API handles block payloads and arbitrary query keys.
+It reads and writes exactly size() table cells, including when decoding the
+external Silent VOLE arrays. It does not copy those arrays or require SIMD
+padding. Width dispatch happens once per operation. The AVX-512/GFNI kernels
+retain the optimized batched table sharing; other targets use the portable
+block-XOR path. SIMD scratch lives in non-inlined ordinary functions.
+Encoding is single-threaded; decoding partitions sufficiently large query
+batches across the requested number of threads. Decode input/output buffers
+must not overlap. A separate ISA performance pass remains useful before
+choosing defaults on machines without AVX-512/GFNI.
+
+Parameter selection and failure
+
+RibbonParams::select(n, ssp) selects a concrete witness for the bound in
+proof.txt, retaining two additional bits beyond ssp. It prefers 25% table
+overhead, with compiled widths 64, 128, 256, 512 and 1024. For intermediate
+sizes/high security it enlarges the table when necessary. Small sets use a
+single dense random band with rank-failure bound less than 2^(n-width).
+Unsupported index ranges or unattainable targets throw explicitly.
+
+For n=2^20 and ssp=40, selection gives m=1,310,720, width=128 and a witness
+certifying about 45.46 bits. The finer research search certifies 46.97 bits
+for the same geometry. These are upper bounds on failure, not measured failure
+rates. The assumptions are distinct keys fixed independently of the seed,
+uniform starts, and independent uniform coefficient bits. The numerical
+verification does not prove an AES-to-ideal-hash reduction.
+
+The API returns false on rank deficiency, including duplicate rows. OPRF
+uses zero free cells, matching its existing Baxos call; standalone solve can
+also randomize free cells. On rank failure the parties finish the already
+started VOLE, exchange a one-byte status before the correction table, and
+both throw. There is no seed retry or conditioning on a successful seed.
+Successful Ribbon sessions therefore add one status byte to the transcript.
+
+This replaces the OPRF's block-valued OKVS and thereby integrates with PSI.
+It does not replace the separate variable-width programmed table in OPPRF
+or the unrelated PSI intersection hash table. The former still uses Baxos.
+
+Validation and reproduction
+
+The registered tests check zero/random free cells, independent scalar
+decoding including nonmembers, linearity, tail and single-key queries,
+unpadded external tables, parallel decode, duplicate-row rank failure,
+semi-honest/malicious PSI, both round configurations, asymmetric set sizes,
+and reuse across table shapes. The failure test requires both OPRF tasks to
+return the expected error. The parameter driver exports witnesses; the
+independent verify_integration_params.py recomputes them at 80 decimal digits.
+
+The isolated Peach tree is /tmp/volepsi-ribbon-integration-20261115, with
+source in src and a fresh CMake build in build. It uses the qualified libOTe
+and cryptoTools install under /tmp/volepsi-chosenbaa30-20261115, and the deps
+prefix from that tree. integration_peach.py acquires all three shared host
+locks for builds, tests and benchmarks. All benchmarks run sequentially.
+
+The integration benchmark compares both backends in the same executable,
+uses actual base OTs and fresh protocol objects each trial, checks a known
+nonempty intersection, and reports synchronous encode/decode intervals.
+Both parties execute on one pinned CPU (CPU 2); wall_both_ms is the combined
+two-party wall time, not a per-party timing or a two-core latency claim.
+Eight trials are run and trial zero is discarded when reporting medians.
+The same input sets, seeds, security, thread count, VOLE backend, and normal
+VOLE/output allocation policy are used for both backends. Ribbon scratch
+allocations retain its Linux transparent-huge-page advice.
+
+Commands (on Peach, from the isolated tree):
+  python3 src/research/ribbon/integration_peach.py build
+  python3 src/research/ribbon/integration_peach.py test
+  python3 src/research/ribbon/integration_peach.py regression
+  python3 src/research/ribbon/integration_peach.py params
+  python3 src/research/ribbon/integration_peach.py sanitize
+  python3 src/research/ribbon/integration_peach.py avx2
+  python3 src/research/ribbon/integration_peach.py portable
+  python3 src/research/ribbon/integration_peach.py bench --backend baxos --name baxos-sh
+  python3 src/research/ribbon/integration_peach.py bench --backend ribbon --name ribbon-sh
+
+Use --malicious 1 for the malicious benchmark. Build/test logs, binary/source
+hashes, CPU/frequency metadata and raw measurements are kept with the results.
+
+Measured results (Peach, CPU 2, n=2^20, ssp=40)
+
+Medians of trials 1-7, in milliseconds:
+                                  Baxos       Ribbon
+  Semi-honest combined wall       449.600     421.093
+  Malicious combined wall         495.234     458.036
+  SH receiver encode               71.309      48.211
+  SH receiver decode               23.051      31.335
+  SH sender decode                 21.848      26.668
+  Malicious receiver encode        71.405      48.411
+  Malicious receiver decode        26.738      26.388
+  Malicious sender decode          22.968      24.671
+
+Ribbon improves combined wall time by 6.3% in SH and 7.5% in malicious
+mode. It sends 1,615,863 fewer receiver bytes (about 1.54 MiB) per session
+in both modes. The sender traffic is unchanged in these runs. Its table
+contains 1,310,720 cells versus Baxos's 1,411,712 cells.
+
+The standalone encode advantage survives integration, but some decode
+advantage does not. A controlled production-decoder comparison with
+identical table contents and queries measures 24.305 ms with ordinary table
+allocation versus 20.698 ms with an aligned, huge-page-advised allocation.
+Outputs match in all 32 runs. This accounts for part of the gap; it does
+not establish that page allocation explains all end-to-end decode variance.
+Do not substitute the advised-buffer result for actual PSI decode timings.
+
+Validation completed: 63/63 native tests, the Ribbon fallback compiled
+without AVX-512, the malicious reduced-round buffered-socket example,
+and 70 parameter witnesses recomputed with 80-digit arithmetic. No native
+Mac/ARM run was performed. The fallback check uses the existing native
+x86 dependency libraries; it is not a whole-stack ARM compatibility claim.
+
+Full Ribbon OPRF/PSI ASan+UBSan tests pass with two narrowly scoped fixes
+in a private test include overlay. Unmodified dependencies trigger vptr
+checks before Ribbon protocol work can finish:
+  * macoro tasks_size was non-static and invoked before the base constructor;
+    making this object-independent helper static removes that lifetime error.
+  * coproto InlinePoly downcast raw storage to ModelController before its
+    construction; construct in mStorage and use the placement-new result.
+Neither sanitizer checks nor recovery-on-error settings were relaxed.
+The shared dependency installation and timed native binaries were not
+modified. Both proposed patches and the original diagnostics are retained
+in results/peach-20261115-integration; these fixes still need to be carried
+into the dependency repositories.
+
+Raw runs, build/source hashes and summary.json are in that results directory.
+The complete log archive is out/ribbon-integration/results.tgz; its SHA-256
+is recorded in archive-sha256.txt. The local production/test source hashes
+were checked against the native build manifest.
+
+Recommendation: Ribbon is a useful opt-in now and a reasonable candidate
+for the PSI default. Next, carry the two small lifetime fixes upstream and
+improve allocation of the actual VOLE tables, then remeasure before changing
+the default. Preserve Baxos as an explicit backend for comparisons and for
+platforms whose Ribbon decode performance has not yet been measured.
+
+Extraction follow-up (2026-11-15): see EXTRACTION.txt before interpreting
+malicious security. The rank-failure certificate above is not an extraction
+certificate. The malicious label hash and salt-opening order have since been
+hardened for both backends; both endpoints must upgrade together. Label width
+remains 128 bits pending the extraction-cap/performance decision. Historical
+timings above precede that hardening. Wider-label bounds in EXTRACTION.txt are
+candidate constructions, not claims about the existing implementation.
+
+The follow-up hash optimization and McRosRoy coroutine alignment fix now pass
+66 native tests and targeted sanitizer checks (with the two private dependency
+fixes above). Batched independent labels give malicious combined wall medians
+of 535.769 ms for Baxos and 498.323 ms for Ribbon at n=2^20 on one Peach CPU.
+Communication remains unchanged. See EXTRACTION.txt and
+results/peach-20261115-hash-opt for the comparison and validation limits.

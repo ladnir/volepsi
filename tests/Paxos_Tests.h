@@ -33,3 +33,8 @@ void Paxos_bounds_and_gf128Inv_Test(const oc::CLP& cmd);
 
 
 void Paxos_experiment(const oc::CLP& cmd);
+void Paxos_dense_kernel_Test(const oc::CLP& cmd);
+void Paxos_mod32_Test(const oc::CLP& cmd);
+void Baxos_dense_reference_Test(const oc::CLP& cmd);
+
+void Baxos_randomized_parallel_determinism_Test(const oc::CLP& cmd);

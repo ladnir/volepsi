@@ -4,6 +4,7 @@ configure_file(config.h.in "config.h" )
 
 set(SRCS
     "RsOprf.cpp"
+    "RibbonOkvs.cpp"
     "RsPsi.cpp"
     "SimpleIndex.cpp"
     "fileBased.cpp"

@@ -9,24 +9,34 @@
 
 #include "volePSI/Defines.h"
 #include "volePSI/Paxos.h"
+#include "volePSI/RibbonOkvs.h"
 #include "libOTe/Vole/Silent/SilentVoleSender.h"
 #include "libOTe/Vole/Silent/SilentVoleReceiver.h"
 
 namespace volePSI
 {
+    inline constexpr oc::MultType DefaultVoleMultType = oc::MultType::ChosenBAA30;
 
     class RsOprfSender : public oc::TimerAdapter
     {
     public:
+        RsOprfSender() { setMultType(DefaultVoleMultType); }
+
         oc::SilentVoleSender<block,block, oc::CoeffCtxGF128> mVoleSender;
         span<block> mB;
         block mD;
         Baxos mPaxos;
+        RibbonOkvs mRibbon;
+        u64 okvsSize() { return mOkvsType == OkvsType::Ribbon ? mRibbon.size() : mPaxos.size(); }
         bool mMalicious = false;
         block mW;
         u64 mBinSize = 1 << 14;
         u64 mSsp = 40;
         bool mDebug = false;
+        // Both parties must select the same backend before starting a session.
+        // Ribbon is currently opt-in; Baxos retains its existing wire format.
+        OkvsType mOkvsType = OkvsType::Baxos;
+        void setOkvsType(OkvsType type) { mOkvsType = type; }
 
         void setMultType(oc::MultType type) { mVoleSender.mLpnMultType = type; };
 
@@ -48,11 +58,17 @@ namespace volePSI
     {
 
     public:
+        RsOprfReceiver() { setMultType(DefaultVoleMultType); }
+
         bool mMalicious = false;
         oc::SilentVoleReceiver<block, block, oc::CoeffCtxGF128> mVoleRecver;
         u64 mBinSize = 1 << 14;
         u64 mSsp = 40;
         bool mDebug = false;
+        // Both parties must select the same backend before starting a session.
+        // Ribbon is currently opt-in; Baxos retains its existing wire format.
+        OkvsType mOkvsType = OkvsType::Baxos;
+        void setOkvsType(OkvsType type) { mOkvsType = type; }
 
         void setMultType(oc::MultType type) { mVoleRecver.mLpnMultType = type; };
 

@@ -6,6 +6,7 @@
 
 #include "Paxos_Tests.h"
 #include "RsOprf_Tests.h"
+#include "Ribbon_Tests.h"
 #include "RsOpprf_Tests.h"
 #include "RsPsi_Tests.h"
 #include "RsCpsi_Tests.h"
@@ -18,6 +19,10 @@ namespace volePSI_Tests
     using namespace volePSI;
     oc::TestCollection Tests([](oc::TestCollection& t) {
         
+        t.add("Baxos_randomized_parallel_determinism_Test", Baxos_randomized_parallel_determinism_Test);
+        t.add("Paxos_dense_kernel_Test", Paxos_dense_kernel_Test);
+        t.add("Paxos_mod32_Test", Paxos_mod32_Test);
+        t.add("Baxos_dense_reference_Test", Baxos_dense_reference_Test);
         t.add("Paxos_buildRow_Test         ", Paxos_buildRow_Test);
         t.add("Paxos_solve_Test            ", Paxos_solve_Test);
         t.add("Paxos_solve_u8_Test         ", Paxos_solve_u8_Test);
@@ -59,9 +64,15 @@ namespace volePSI_Tests
         t.add("Gmw_add_test                ", Gmw_add_test);
 #endif
 
+        t.add("Ribbon_okvs_test", Ribbon_okvs_test);
+        t.add("Ribbon_protocol_test", Ribbon_protocol_test);
+        t.add("Ribbon_failure_test", Ribbon_failure_test);
         t.add("RsOprf_eval_test            ", RsOprf_eval_test);
         t.add("RsOprf_multiKeyAES_test     ", RsOprf_multiKeyAES_test);
         t.add("RsOprf_mal_test             ", RsOprf_mal_test);
+        t.add("RsOprf_salt_order_test", RsOprf_salt_order_test);
+        t.add("RsOprf_seed_rejection_test", RsOprf_seed_rejection_test);
+        t.add("RsOprf_ribbon_seed_test", RsOprf_ribbon_seed_test);
         t.add("RsOprf_reduced_test         ", RsOprf_reduced_test);
                    
 #ifdef VOLE_PSI_ENABLE_OPPRF
@@ -78,6 +89,7 @@ namespace volePSI_Tests
         t.add("Psi_Rs_reduced_test         ", Psi_Rs_reduced_test);
         t.add("Psi_Rs_multiThrd_test       ", Psi_Rs_multiThrd_test);
         t.add("Psi_Rs_mal_test             ", Psi_Rs_mal_test);
+        t.add("Psi_Rs_reuse_test           ", Psi_Rs_reuse_test);
                                            
 #ifdef VOLE_PSI_ENABLE_CPSI
         t.add("Cpsi_Rs_empty_test          ", Cpsi_Rs_empty_test);

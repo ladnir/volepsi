@@ -22,8 +22,8 @@ void networkSocketExampleRun(const oc::CLP& cmd)
 
         if (cmd.isSet("useSilver") || cmd.isSet("useQC"))
             throw std::invalid_argument("Silver and QuasiCyclic are not supported for PSI GF128 VOLE.");
-        // Use libOTe's default VOLE encoder.
-        auto type = oc::DefaultMultType;
+        // Use volePSI's large-field VOLE encoder.
+        auto type = volePSI::DefaultVoleMultType;
 
         // use fewer rounds of communication but more computation.
         auto useReducedRounds = cmd.isSet("reducedRounds");
@@ -100,6 +100,7 @@ void networkSocketExampleRun(const oc::CLP& cmd)
             // configure
             volePSI::RsPsiSender sender;
             sender.setMultType(type);
+            sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
             sender.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
             std::cout << "sender start\n";
@@ -121,6 +122,7 @@ void networkSocketExampleRun(const oc::CLP& cmd)
             // Configure.
             volePSI::RsPsiReceiver recevier;
             recevier.setMultType(type);
+            recevier.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
             recevier.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
             std::cout << "recver start\n";

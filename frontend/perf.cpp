@@ -354,8 +354,8 @@ void perfPSI(oc::CLP& cmd)
 
 	if (cmd.isSet("useSilver") || cmd.isSet("useQC"))
 	    throw std::invalid_argument("Silver and QuasiCyclic are not supported for PSI GF128 VOLE.");
-	// Use libOTe's default VOLE encoder.
-	auto type = oc::DefaultMultType;
+	// Use volePSI's large-field VOLE encoder.
+	auto type = volePSI::DefaultVoleMultType;
 	//IOService ios;
 
 	//auto chl0 = Session(ios, "localhost:1212", SessionMode::Server).addChannel();
@@ -385,8 +385,11 @@ void perfPSI(oc::CLP& cmd)
 	recv.init(n, n, 40, ZeroBlock, mal, nt);
 	send.init(n, n, 40, ZeroBlock, mal, nt);
 
-	recv.setMultType(type);
-	send.setMultType(type);
+    recv.setMultType(type);
+    send.setMultType(type);
+    auto okvs = parseOkvsType(cmd.getOr<std::string>("okvs", "baxos"));
+    recv.setOkvsType(okvs);
+    send.setOkvsType(okvs);
 
 	if (noCompress)
 	{

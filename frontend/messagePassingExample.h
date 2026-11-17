@@ -127,8 +127,8 @@ void messagePassingExampleRun(oc::CLP& cmd)
 
     if (cmd.isSet("useSilver") || cmd.isSet("useQC"))
         throw std::invalid_argument("Silver and QuasiCyclic are not supported for PSI GF128 VOLE.");
-    // Use libOTe's default VOLE encoder.
-    auto type = oc::DefaultMultType;
+    // Use volePSI's large-field VOLE encoder.
+    auto type = volePSI::DefaultVoleMultType;
 
     // use fewer rounds of communication but more computation.
     auto useReducedRounds = cmd.isSet("reducedRounds");
@@ -151,6 +151,7 @@ void messagePassingExampleRun(oc::CLP& cmd)
             set[i] = oc::block(0, i);
 
         sender.setMultType(type);
+        sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
         sender.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
         if (verbose)
@@ -174,6 +175,7 @@ void messagePassingExampleRun(oc::CLP& cmd)
 
         volePSI::RsPsiReceiver recevier;
         recevier.setMultType(type);
+        recevier.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
         recevier.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
         if (verbose)
@@ -209,8 +211,8 @@ void messagePassingExampleBoth(oc::CLP& cmd)
 
     if (cmd.isSet("useSilver") || cmd.isSet("useQC"))
         throw std::invalid_argument("Silver and QuasiCyclic are not supported for PSI GF128 VOLE.");
-    // Use libOTe's default VOLE encoder.
-    auto type = oc::DefaultMultType;
+    // Use volePSI's large-field VOLE encoder.
+    auto type = volePSI::DefaultVoleMultType;
 
     // use fewer rounds of communication but more computation.
     auto useReducedRounds = cmd.isSet("reducedRounds");
@@ -231,6 +233,7 @@ void messagePassingExampleBoth(oc::CLP& cmd)
         senderSet[i] = oc::block(0, i);
 
     sender.setMultType(type);
+    sender.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
     sender.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
     if (verbose)
@@ -249,6 +252,7 @@ void messagePassingExampleBoth(oc::CLP& cmd)
 
     volePSI::RsPsiReceiver recevier;
     recevier.setMultType(type);
+    recevier.setOkvsType(volePSI::parseOkvsType(cmd.getOr<std::string>("okvs", "baxos")));
     recevier.init(ns, nr, ssp, oc::sysRandomSeed(), mal, 1, useReducedRounds);
 
     if (verbose)
