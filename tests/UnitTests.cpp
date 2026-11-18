@@ -74,6 +74,8 @@ namespace volePSI_Tests
         t.add("RsOprf_seed_rejection_test", RsOprf_seed_rejection_test);
         t.add("RsOprf_ribbon_seed_test", RsOprf_ribbon_seed_test);
         t.add("RsOprf_reduced_test         ", RsOprf_reduced_test);
+        t.add("RsOprf_localAbort_test", RsOprf_localAbort_test);
+        t.add("RsOprf_peerAbort_test", RsOprf_peerAbort_test);
                    
 #ifdef VOLE_PSI_ENABLE_OPPRF
         t.add("RsOpprf_eval_blk_test       ", RsOpprf_eval_blk_test);

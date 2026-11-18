@@ -1,4 +1,5 @@
 #include "RsOprf.h"
+#include <exception>
 
 namespace volePSI
 {
@@ -366,26 +367,33 @@ namespace volePSI
 		fu = genVole(tableSize, prng, fork, reducedRounds)
 			| macoro::make_eager();
 
-
-
-		hPtr.reset(new block[values.size()]);
-		h = span<block>(hPtr.get(), values.size());
-
-		oc::mAesFixedKey.hashBlocks(values, h);
-		setTimePoint("RsOprfReceiver::receive-hash");
-
-		//auto pPtr = std::make_shared<std::vector<block>>(paxos.size());
-		//span<block> p = *pPtr;
-
-		p.resize(tableSize);
-
-		setTimePoint("RsOprfReceiver::receive-alloc");
-
-        if (mOkvsType == OkvsType::Ribbon)
-            ribbonSuccess = ribbon.solve(values, h, p) ? 1 : 0;
-        else
-            paxos.solve<block>(values, h, p, nullptr, numThreads);
-		setTimePoint("RsOprfReceiver::receive-solve");
+		// The eager VOLE may be suspended on the fork while local OKVS work
+		// throws. Cancel its socket operations and join it before destroying fu.
+		auto localError = std::exception_ptr{};
+		try
+		{
+			hPtr.reset(new block[values.size()]);
+			h = span<block>(hPtr.get(), values.size());
+			oc::mAesFixedKey.hashBlocks(values, h);
+			setTimePoint("RsOprfReceiver::receive-hash");
+			p.resize(tableSize);
+			setTimePoint("RsOprfReceiver::receive-alloc");
+			if (mOkvsType == OkvsType::Ribbon)
+				ribbonSuccess = ribbon.solve(values, h, p) ? 1 : 0;
+			else
+				paxos.solve<block>(values, h, p, nullptr, numThreads);
+			setTimePoint("RsOprfReceiver::receive-solve");
+		}
+		catch (...)
+		{
+			localError = std::current_exception();
+		}
+		if (localError)
+		{
+			try { co_await chl.close(); } catch (...) {}
+			try { co_await fu; } catch (...) {}
+			std::rethrow_exception(localError);
+		}
 		co_await(fu);
 
         // Finish the in-flight VOLE on both parties, then report a one-shot
