@@ -43,6 +43,28 @@ find_package(volePSI REQUIRED)
 target_link_libraries(myProject PRIVATE visa::volePSI)
 ```
 
-## Build options
+## Compile options
 
-Pass CMake options to `build.py` with `-D`, for example `python3 build.py -DVOLE_PSI_ENABLE_BOOST=ON`. Common options include `VOLE_PSI_ENABLE_OPENSSL` for TLS support, `VOLE_PSI_ENABLE_CPSI` for circuit PSI, `FETCH_AUTO` for dependency fetching, and `CMAKE_PREFIX_PATH` for installed dependencies. See [build options](cmake/buildOptions.cmake) and `python3 build.py --help` for the full list.
+Pass CMake options to `build.py` with `-D`, for example `python3 build.py -DVOLE_PSI_ENABLE_BOOST=ON`. The build output shows their current values.
+
+| Option | Purpose |
+| --- | --- |
+| `VOLE_PSI_NO_SYSTEM_PATH` | Search only `CMAKE_PREFIX_PATH` and managed dependencies, not system install paths. |
+| `CMAKE_PREFIX_PATH` | Search the specified prefix for installed dependencies. |
+| `CMAKE_BUILD_TYPE` | Select `Debug`, `Release`, or `RelWithDebInfo`. |
+| `FETCH_AUTO` | Fetch dependencies that are not found locally. |
+| `FETCH_SPARSEHASH`, `FETCH_LIBOTE`, `FETCH_LIBDIVIDE` | Fetch the named dependency. |
+| `VOLE_PSI_ENABLE_SSE` | Enable SSE intrinsics. |
+| `VOLE_PSI_ENABLE_PIC` | Build position-independent code. |
+| `VOLE_PSI_ENABLE_ASAN` | Enable AddressSanitizer. |
+| `VOLE_PSI_ENABLE_GMW` | Compile GMW support for circuit PSI. |
+| `VOLE_PSI_ENABLE_CPSI` | Compile circuit PSI. |
+| `VOLE_PSI_ENABLE_OPPRF` | Compile OPPRF support for circuit PSI. |
+| `VOLE_PSI_ENABLE_BOOST` | Enable Boost networking support. |
+| `VOLE_PSI_ENABLE_OPENSSL` | Enable OpenSSL networking support. |
+| `VOLE_PSI_ENABLE_BITPOLYMUL` | Enable libOTe's binary quasi-cyclic OT support. |
+| `VOLE_PSI_ENABLE_SODIUM` | Use libsodium for elliptic-curve operations. |
+| `VOLE_PSI_SODIUM_MONTGOMERY` | Request libOTe's modified libsodium implementation. |
+| `VOLE_PSI_ENABLE_RELIC` | Use Relic for elliptic-curve operations. |
+
+The `VOLE_PSI_ENABLE_*` and `FETCH_*` switches take `ON` or `OFF`. See [build options](cmake/buildOptions.cmake) and `python3 build.py --help` for details.
