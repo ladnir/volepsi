@@ -2149,6 +2149,39 @@ void Baxos_idxtype_sentinel_and_params_Test(const oc::CLP&)
 			b.decode<block>(items, bVals, bTable);
 		});
 	}
+
+	// 4. Baxos::init rejects zero numItems and computes the bin count without
+	// numItems + binSize - 1 wrapping around.
+	{
+		bool threw = false;
+		try
+		{
+			Baxos b;
+			b.init(0, 32, 3, 40, PaxosParam::GF128, ZeroBlock);
+		}
+		catch (const std::invalid_argument&)
+		{
+			threw = true;
+		}
+		if (!threw)
+			throw RTE_LOC;
+
+		const u64 numItems = 32;
+		Baxos baxos;
+		baxos.init(numItems, std::numeric_limits<u64>::max(), 3, 40,
+			PaxosParam::GF128, block(11, 13));
+		if (baxos.mNumBins != 1)
+			throw RTE_LOC;
+		PRNG prng(block(15, 17));
+		std::vector<block> items(numItems), values(numItems), decoded(numItems);
+		prng.get(items.data(), items.size());
+		prng.get(values.data(), values.size());
+		std::vector<block> table(baxos.size(), ZeroBlock);
+		baxos.solve<block>(items, values, table);
+		baxos.decode<block>(items, decoded, table);
+		if (decoded != values)
+			throw RTE_LOC;
+	}
 }
 
 void Paxos_bounds_and_gf128Inv_Test(const oc::CLP&)
