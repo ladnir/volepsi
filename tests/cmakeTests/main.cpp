@@ -1,6 +1,7 @@
 
 
 #include "volePSI/Paxos.h"
+#include "volePSI/config.h"
 
 int main()
 {

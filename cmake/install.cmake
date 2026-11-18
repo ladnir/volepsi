@@ -56,6 +56,10 @@ install(
     DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/"
     FILES_MATCHING PATTERN "*.h")
 
+# config.h is generated in the build tree, so the source-header rule misses it.
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/volePSI/config.h"
+    DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}/volePSI")
+
 
 # install config
 install(EXPORT volePSITargets
