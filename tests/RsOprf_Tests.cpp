@@ -8,6 +8,8 @@
 #include "Common.h"
 #include "cryptoTools/Crypto/MultiKeyAES.h"
 #include <array>
+#include <exception>
+#include <string>
 #include "coproto/Socket/BufferingSocket.h"
 
 using coproto::LocalAsyncSocket;
@@ -15,6 +17,26 @@ using namespace volePSI;
 using namespace oc;
 
 namespace {
+    macoro::task<> sendBadSeedThenClose(coproto::Socket& socket)
+    {
+        auto junk = std::vector<u8>(1);
+        co_await socket.send(std::move(junk));
+        co_await socket.close();
+    }
+
+    macoro::task<> receiveAndCloseOnError(RsOprfReceiver& receiver,
+        volePSI::span<const block> values, volePSI::span<block> output,
+        PRNG& prng, coproto::Socket& socket)
+    {
+        std::exception_ptr error;
+        try { co_await receiver.receive(values, output, prng, socket); }
+        catch (...) { error = std::current_exception(); }
+        if (error)
+        {
+            co_await socket.close();
+            std::rethrow_exception(error);
+        }
+    }
 #ifdef _MSC_VER
     __declspec(noinline)
 #else
@@ -401,6 +423,58 @@ void RsOprf_reduced_test(const CLP&)
         }
         if (count)
             throw RTE_LOC;
+    }
+}
+
+void RsOprf_localAbort_test(const CLP& cmd)
+{
+    const u64 trials = cmd.getOr("trials", 1);
+    for (u64 t = 0; t < trials; ++t)
+    {
+        RsOprfSender sender;
+        RsOprfReceiver receiver;
+        sender.mBinSize = receiver.mBinSize = 1 << 8;
+        auto sockets = LocalAsyncSocket::makePair();
+        PRNG senderPrng(block(t, 0));
+        PRNG receiverPrng(block(t, 1));
+        const u64 n = 1000;
+        std::vector<block> values(n, block(t, 42));
+        std::vector<block> output(n);
+
+        auto results = macoro::sync_wait(macoro::when_all_ready(
+            receiveAndCloseOnError(receiver, values, output, receiverPrng, sockets[1]),
+            sender.send(n, senderPrng, sockets[0])));
+        bool receiverFailed = false;
+        bool senderFailed = false;
+        try { std::get<0>(results).result(); }
+        catch (const std::runtime_error& e)
+        {
+            receiverFailed = std::string(e.what()).find("Baxos per-thread bin overflow")
+                != std::string::npos;
+        }
+        try { std::get<1>(results).result(); }
+        catch (...) { senderFailed = true; }
+        if (!receiverFailed || !senderFailed) throw RTE_LOC;
+    }
+}
+
+void RsOprf_peerAbort_test(const CLP& cmd)
+{
+    const u64 trials = cmd.getOr("trials", 1);
+    for (u64 t = 0; t < trials; ++t)
+    {
+        RsOprfSender sender;
+        auto sockets = LocalAsyncSocket::makePair();
+        PRNG prng(block(t, 0));
+        auto results = macoro::sync_wait(macoro::when_all_ready(
+            sender.send(1000, prng, sockets[0]),
+            sendBadSeedThenClose(sockets[1])));
+        bool senderFailed = false;
+        try { std::get<0>(results).result(); }
+        catch (...) { senderFailed = true; }
+        try { std::get<1>(results).result(); }
+        catch (...) {}
+        if (!senderFailed || !sender.mVoleSender.mB.empty()) throw RTE_LOC;
     }
 }
 

@@ -16,3 +16,5 @@ void RsOprf_salt_order_test(const oc::CLP&);
 void RsOprf_seed_rejection_test(const oc::CLP&);
 void RsOprf_ribbon_seed_test(const oc::CLP&);
 void RsOprf_reduced_test(const oc::CLP&);
+void RsOprf_localAbort_test(const oc::CLP&);
+void RsOprf_peerAbort_test(const oc::CLP&);
