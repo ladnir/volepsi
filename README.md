@@ -1,83 +1,48 @@
 # Vole-PSI
 
+volePSI implements standard private set intersection (PSI) and circuit PSI, where the result is secret shared between the parties. It is based on [VOLE-PSI: Fast OPRF and Circuit-PSI from Vector-OLE](https://eprint.iacr.org/2021/266) and [Blazing Fast PSI from Improved OKVS and Subfield VOLE](misc/blazingFastPSI.pdf).
 
-Vole-PSI implements the protocols described in [VOLE-PSI: Fast OPRF and Circuit-PSI from Vector-OLE](https://eprint.iacr.org/2021/266) and [Blazing Fast PSI from Improved OKVS and Subfield VOLE](misc/blazingFastPSI.pdf). The library implements standard [Private Set Intersection (PSI)](https://en.wikipedia.org/wiki/Private_set_intersection) along with a variant called Circuit PSI where the result is secret shared between the two parties.
+The C++ library builds on Windows, Linux, and macOS. Its main dependencies include [libOTe](https://github.com/osu-crypto/libOTe) and [Coproto](https://github.com/ladnir/coproto).
 
-The library is cross platform (win,linux,mac) and depends on [libOTe](https://github.com/osu-crypto/libOTe), [sparsehash](https://github.com/sparsehash/sparsehash), [Coproto](https://github.com/Visa-Research/coproto).
+## Build
 
-### Build
+The build requires Python 3, CMake 3.15 or newer, a C++20 compiler, and Git. `build.py` fetches dependencies as needed.
 
-The library can be cloned and built with networking support as
-```
-git clone https://github.com/Visa-Research/volepsi.git
+```sh
+git clone https://github.com/ladnir/volepsi.git
 cd volepsi
+python3 build.py
+```
+
+For TCP networking support, build with Boost enabled:
+
+```sh
 python3 build.py -DVOLE_PSI_ENABLE_BOOST=ON
 ```
-If TCP/IP support is not required, then a minimal version of the library can be build by calling `python3 build.py`. See below and the cmake/python output for additional options.
-The user can manually call cmake as well.
 
-When upgrading from an older checkout, run `python3 build.py --clean` before rebuilding to refresh the staged dependencies. The bundled libOTe revision is pinned in `thirdparty/getLibOTe.cmake`; externally supplied libOTe builds must provide the same API. Update both PSI peers together: volePSI now selects `ChosenBAA30` over GF(2^128), and older protocol builds are not wire-compatible. Silver and QuasiCyclic are not supported for the GF128 VOLE used by PSI.
+The library and `frontend` executable are written under `out/build/<platform>/`.
 
-The default `ChosenBAA30` VOLE encoder uses the 30% distance tier: RS[16,8,9], a 256-element nonzero coefficient alphabet, and uniform shuffles. It has rate one half and stays over GF(2^128). At n=2^21 its finite distance bound is >30.524% under ideal uniform setup; other lengths use pseudo-distance tuning, not that finite certificate. The default security setting selects 128 noise positions. Each call adds a joint code-seed exchange (three messages, 64 payload bytes), including in reduced-round mode. libOTe's `BinaryBAA` is a separate binary-only 10% code for Silent OT and is rejected by Silent VOLE; it is not a PSI option. The former `ChosenBaa10` selector has been removed. The older `ChosenBaa16x8` and quarter-rate `ChosenBaa16x4` profiles remain explicitly selectable; both peers must select the same profile.
+## Use
 
-The pinned libOTe provides AVX-512/VPCLMUL, AVX2, Apple ARM PMULL, and portable encoder paths with identical GF(2^128) outputs. ISA selection is static: builds with `ENABLE_VPCLMUL` require a CPU supporting that instruction, which AVX2 or AVX-512 alone does not guarantee. The dependency also fixes ARM carryless-multiply dispatch and MultiKeyAES, so no local AES source patch is needed. libOTe's standalone encoder supports other fields, including Goldilocks; the VOLE/PSI adapter continues to use GF(2^128).
+Run `frontend` without arguments for file-based PSI, example, benchmark, and unit-test options. The [socket example](frontend/networkSocketExample.h) shows network setup; the [message-passing example](frontend/messagePassingExample.h) shows how to exchange protocol messages in an application.
 
-The paper's finite code-sampling certificates apply at specific lengths and to ideal randomness. The implementation uses pseudo-distance 0.30 for RS[16,8,9] and 0.60 for RS[16,4,13] as engineering estimates across supported lengths. At the default 128-bit target, the half-rate profile selects 128 noise positions and the quarter-rate profile selects 64. Their independent attack floors are `secParam` and `ceil(secParam / 2)`, respectively; the distance requirement can raise either count. These choices do not claim a new proof of 128-bit VOLE security for every configuration. See the pinned libOTe revision's `libOTe/Tools/BlkAccCode/README.md` for the ensemble, seed exchange, and security scope.
+The `-okvs baxos|ribbon` option selects the OKVS backend. Baxos is the default; both parties must select the same backend.
 
-The output library `volePSI` and executable `frontend` will be written to `out/build/<platform>/`. The `frontend` can perform PSI based on files as input sets and communicate via sockets. See the output of `frontend` for details. There is also two example on how to perform [networking](https://github.com/Visa-Research/volepsi/blob/main/frontend/networkSocketExample.h#L7) or [manually](https://github.com/Visa-Research/volepsi/blob/main/frontend/messagePassingExample.h#L93) get & send the protocol messages.
+## Install and link
 
-##### Compile Options
-Options can be set as `-D NAME=VALUE`. For example, `-D VOLE_PSI_NO_SYSTEM_PATH=true`. See the output of the build for default/current value. Options include :
- * `VOLE_PSI_NO_SYSTEM_PATH`, values: `true,false`.  When looking for dependencies, do not look in the system install. Instead use `CMAKE_PREFIX_PATH` and the internal dependency management.  
-* `CMAKE_BUILD_TYPE`, values: `Debug,Release,RelWithDebInfo`. The build type. 
-* `FETCH_AUTO`, values: `true,false`. If true, dependencies will first be searched for and if not found then automatically downloaded.
-* `FETCH_SPARSEHASH`, values: `true,false`. If true, the dependency sparsehash will always be downloaded. 
-* `FETCH_LIBOTE`, values: `true,false`. If true, the dependency libOTe will always be downloaded. 
-* `FETCH_LIBDIVIDE`, values: `true,false`. If true, the dependency libdivide will always be downloaded. 
-* `VOLE_PSI_ENABLE_SSE`, values: `true,false`. If true, the library will be built with SSE intrinsics support. 
-* `VOLE_PSI_ENABLE_PIC`, values: `true,false`. If true, the library will be built `-fPIC` for shared library support. 
-* `VOLE_PSI_ENABLE_ASAN`, values: `true,false`. If true, the library will be built ASAN enabled. 
-* `VOLE_PSI_ENABLE_GMW`, values: `true,false`. If true, the GMW protocol will be compiled. Only used for Circuit PSI.
-* `VOLE_PSI_ENABLE_CPSI`, values: `true,false`. If true,  the circuit PSI protocol will be compiled. 
-* `VOLE_PSI_ENABLE_OPPRF`, values: `true,false`.  If true, the OPPRF protocol will be compiled. Only used for Circuit PSI.
-* `VOLE_PSI_ENABLE_BOOST`, values: `true,false`. If true, the library will be built with boost networking support. This support is managed by libOTe. 
-* `VOLE_PSI_ENABLE_OPENSSL`, values: `true,false`. If true,the library will be built with OpenSSL networking support. This support is managed by libOTe. If enabled, it is the responsibility of the user to install openssl to the system or to a location contained in `CMAKE_PREFIX_PATH`.
-* `VOLE_PSI_ENABLE_BITPOLYMUL`, values: `true,false`. Enables libOTe's binary quasi-cyclic OT support. It does not select the GF(2^128) VOLE encoder used by PSI.
-* `VOLE_PSI_ENABLE_SODIUM`, values: `true,false`. If true, the library will be built libSodium for doing elliptic curve operations. This or relic must be enabled. This support is managed by libOTe. 
-* `VOLE_PSI_SODIUM_MONTGOMERY`, values: `true,false`. If true, the library will use a non-standard version of sodium that enables slightly better efficiency. 
-* `VOLE_PSI_ENABLE_RELIC`, values: `true,false`. If true, the library will be built relic for doing elliptic curve operations. This or sodium must be enabled. This support is managed by libOTe. 
+Install volePSI and its fetched dependencies to a chosen prefix:
 
-
-### Installing
-
-The library and any fetched dependencies can be installed. 
-```
-python3 build.py --install
-```
-or 
-```
-python3 build.py --install=install/prefix/path
-```
-if a custom install prefix is perfected. Install can also be performed via cmake.
-
-### Linking
-
-libOTe can be linked via cmake as
-```
-find_package(volepsi REQUIRED)
-target_link_libraries(myProject visa::volepsi)
-```
-To ensure that cmake can find volepsi, you can either install volepsi or build it locally and set `-D CMAKE_PREFIX_PATH=path/to/volepsi` or provide its location as a cmake `HINTS`, i.e. `find_package(volepsi HINTS path/to/volepsi)`.
-
-To link a non-cmake project you will need to link volepsi, libOTe,coproto, macoro, (sodium or relic), optionally boost and openss if enabled. These will be installed to the install location and staged to `./out/install/<platform>`. 
-
-
-### Dependency Management
-
-By default the dependencies are fetched automatically. This can be turned off by using cmake directly or adding `-D FETCH_AUTO=OFF`. For other options see the cmake output or that of `python build.py --help`.
-
-If the dependency is installed to the system, then cmake should automatically find it if `VOLE_PSI_NO_SYSTEM_PATH` is `false`. If they are installed to a specific location, then you call tell cmake about them as 
-```
-python3 build.py -D CMAKE_PREFIX_PATH=install/prefix/path
+```sh
+python3 build.py --install=path/to/prefix
 ```
 
+In a CMake consumer, set `CMAKE_PREFIX_PATH` to that prefix and link the exported target:
+
+```cmake
+find_package(volePSI REQUIRED)
+target_link_libraries(myProject PRIVATE visa::volePSI)
+```
+
+## Build options
+
+Pass CMake options to `build.py` with `-D`, for example `python3 build.py -DVOLE_PSI_ENABLE_BOOST=ON`. Common options include `VOLE_PSI_ENABLE_OPENSSL` for TLS support, `VOLE_PSI_ENABLE_CPSI` for circuit PSI, `FETCH_AUTO` for dependency fetching, and `CMAKE_PREFIX_PATH` for installed dependencies. See [build options](cmake/buildOptions.cmake) and `python3 build.py --help` for the full list.
